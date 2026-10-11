@@ -1,0 +1,209 @@
+package com.klisee.reloaded.ui
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.SettingsBackupRestore
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.VideogameAsset
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.klisee.reloaded.GameRepository
+import com.klisee.reloaded.Preferences
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    repo: GameRepository,
+    prefs: Preferences,
+    revision: Int = 0,
+    onLog: () -> Unit,
+    onAbout: () -> Unit,
+    bottomBar: @Composable () -> Unit = {},
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    var status by remember(revision) { mutableStateOf(repo.status()) }
+    var keepScreenOn by remember { mutableStateOf(prefs.keepScreenOn) }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    val installed = status as? GameRepository.Status.Ready
+
+    // Export writes the saves out as a zip; import puts one back, replacing the current saves.
+    val exportSaves = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = repo.exportSaves()
+            result.onSuccess { file ->
+                val copied = runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+                }.isSuccess
+                file.delete()
+                snackbar.showSnackbar(if (copied) "Partidas exportadas." else "No pude escribir el archivo.")
+            }.onFailure { snackbar.showSnackbar(it.message ?: "No pude exportar las partidas.") }
+        }
+    }
+
+    val importSaves = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = repo.importSaves(uri)
+            snackbar.showSnackbar(
+                result.fold(
+                    onSuccess = { count ->
+                        if (count == 1) "Restaurada 1 partida." else "Restauradas $count partidas."
+                    },
+                    onFailure = { it.message ?: "No pude importar las partidas." },
+                ),
+            )
+        }
+    }
+
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("Borrar el juego?") },
+            text = { Text("Se borra la copia extraida (${formatBytes(installed?.sizeBytes ?: 0)}). Podras volver a descargarlo o importarlo, pero tus partidas guardadas se pierden.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingDelete = false
+                    scope.launch {
+                        repo.deleteGame()
+                        status = repo.status()
+                    }
+                }) { Text("Borrar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("Cancelar") } },
+        )
+    }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Ajustes") }) },
+        bottomBar = bottomBar,
+        snackbarHost = { SnackbarHost(snackbar) },
+        contentWindowInsets = WindowInsets(0.dp),
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Spacer(Modifier.height(4.dp))
+
+            SettingsGroup("Juego") {
+                if (installed == null) {
+                    InfoRow(
+                        icon = Icons.Filled.Info,
+                        title = "Sin juego instalado",
+                        value = "Descargalo o importalo desde la pantalla principal",
+                        items = 1,
+                        index = 0,
+                    )
+                } else {
+                    InfoRow(Icons.Filled.VideogameAsset, "Version", installed.version ?: "sin datos", items = 4, index = 0)
+                    InfoRow(Icons.Filled.Storage, "Tamano en disco", formatBytes(installed.sizeBytes), items = 4, index = 1)
+                    InfoRow(Icons.Filled.CalendarMonth, "Instalado el", formatDate(installed.installedAt), items = 4, index = 2)
+                    NavRow(
+                        icon = Icons.Filled.Delete,
+                        title = "Borrar el juego",
+                        subtitle = "Libera ${formatBytes(installed.sizeBytes)} del almacenamiento",
+                        items = 4,
+                        index = 3,
+                        onClick = { confirmingDelete = true },
+                    )
+                }
+            }
+
+            SettingsGroup("Partidas") {
+                NavRow(
+                    icon = Icons.Filled.SaveAlt,
+                    title = "Exportar partidas",
+                    subtitle = "Tus partidas, equipos y personajes en un zip",
+                    items = 2,
+                    index = 0,
+                    enabled = installed != null,
+                    onClick = { exportSaves.launch("partidas-reloaded.zip") },
+                )
+                NavRow(
+                    icon = Icons.Filled.SettingsBackupRestore,
+                    title = "Importar partidas",
+                    subtitle = "Restaura un zip; reemplaza las partidas actuales",
+                    items = 2,
+                    index = 1,
+                    enabled = installed != null,
+                    onClick = { importSaves.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                )
+            }
+
+            SettingsGroup("Pantalla") {
+                SwitchRow(
+                    icon = Icons.Filled.LightMode,
+                    title = "Mantener la pantalla encendida",
+                    subtitle = "Evita que el movil se bloquee mientras juegas",
+                    checked = keepScreenOn,
+                    items = 1,
+                    index = 0,
+                    onCheckedChange = {
+                        keepScreenOn = it
+                        prefs.keepScreenOn = it
+                    },
+                )
+            }
+
+            SettingsGroup("Ayuda") {
+                NavRow(
+                    icon = Icons.Filled.Article,
+                    title = "Logs",
+                    subtitle = "En caso de un error, comparte los logs, me ayudarán a saber qué falló",
+                    items = 2,
+                    index = 0,
+                    onClick = onLog,
+                )
+                NavRow(
+                    icon = Icons.Filled.Info,
+                    title = "Acerca de",
+                    subtitle = "Version, creditos y aviso",
+                    items = 2,
+                    index = 1,
+                    onClick = onAbout,
+                )
+            }
+
+            Spacer(Modifier.height(BottomNavSpace))
+        }
+    }
+}
