@@ -241,18 +241,16 @@ fun MySavesScreen(repo: GameRepository, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            // The whole set, not one slot: the teams and custom characters the game carries over
-            // live outside the slots, so they need their own way in and out.
-            Text(
-                text = "Para llevarte tambien los equipos y los personajes personalizados:",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // One slot at a time is the export and import on each card. This is the whole set: the
+            // teams and the custom characters live outside the slots, so they need their own way in
+            // and out, and the button says so without a line of explanation above it.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { saveAll.launch("partidas-reloaded.zip") }) { Text("Exportar todo") }
+                TextButton(onClick = { saveAll.launch("partidas-reloaded.zip") }) {
+                    Text("Exportar todas las partidas")
+                }
                 TextButton(
                     onClick = { restoreEverything.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
-                ) { Text("Importar todo") }
+                ) { Text("Importar todas las partidas") }
             }
 
             Spacer(Modifier.height(BottomNavSpace))
