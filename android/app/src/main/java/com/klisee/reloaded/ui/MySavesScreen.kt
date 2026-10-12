@@ -229,11 +229,6 @@ fun MySavesScreen(repo: GameRepository, onBack: () -> Unit) {
             }
 
             Text(
-                text = "Importar reemplaza la partida de esa ranura, aunque venga de otra.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
                 text = "Si la partida viene de otra ranura, la primera vez que la cargues en el juego " +
                     "te preguntara si quieres asignarla a esa. Dile que si: a partir de ahi sera suya, " +
                     "y no volvera a preguntarlo.",
@@ -243,13 +238,16 @@ fun MySavesScreen(repo: GameRepository, onBack: () -> Unit) {
 
             // One slot at a time is the export and import on each card. This is the whole set: the
             // teams and the custom characters live outside the slots, so they need their own way in
-            // and out, and the button says so without a line of explanation above it.
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { saveAll.launch("partidas-reloaded.zip") }) {
-                    Text("Exportar todas las partidas")
-                }
+            // and out. One under the other, because side by side the longer label wrapped and left
+            // the two buttons uneven.
+            Column {
+                TextButton(
+                    onClick = { saveAll.launch("partidas-reloaded.zip") },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Exportar todas las partidas") }
                 TextButton(
                     onClick = { restoreEverything.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("Importar todas las partidas") }
             }
 
