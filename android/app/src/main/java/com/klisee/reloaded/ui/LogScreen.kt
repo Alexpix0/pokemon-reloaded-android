@@ -29,10 +29,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.klisee.reloaded.GameRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Shows the app's own logcat (which includes the emulator's stdout/stderr and native panics),
@@ -57,8 +59,18 @@ fun LogScreen(repo: GameRepository, bottomBar: @Composable () -> Unit = {}) {
                 actions = {
                     IconButton(onClick = { nonce++ }) { Icon(Icons.Filled.Refresh, contentDescription = "Actualizar") }
                     IconButton(onClick = {
-                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-                        context.startActivity(Intent.createChooser(send, "Compartir logs"))
+                        // A file, not a wall of text: whoever reports a bug can attach it, and it
+                        // keeps the whole thing instead of whatever fits in a message.
+                        val sent = runCatching {
+                            val dir = File(context.cacheDir, "logs").apply { mkdirs() }
+                            val file = File(dir, "logs-reloaded.txt").apply { writeText(text) }
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", file)
+                            Intent(Intent.ACTION_SEND)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_STREAM, uri)
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }.getOrNull() ?: Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                        context.startActivity(Intent.createChooser(sent, "Compartir logs"))
                     }) { Icon(Icons.Filled.Share, contentDescription = "Compartir") }
                 },
             )
@@ -87,7 +99,14 @@ private fun readLog(repo: GameRepository): String {
         process.waitFor()
         output.trim()
     }.getOrNull()
-    if (!logcat.isNullOrEmpty()) return logcat
+    if (!logcat.isNullOrEmpty()) {
+        // The app's own file is kept so that what happened before a restart is not lost; it is
+        // shown after whatever logcat still remembers.
+        val kept = runCatching {
+            File(repo.logFile.parentFile, "app.log").readText().takeLast(32_000)
+        }.getOrNull()
+        return if (kept.isNullOrBlank()) logcat else "$logcat\n\n--- de antes de reiniciar ---\n$kept"
+    }
 
     val file = repo.logFile
     if (!file.isFile) return "Todavía no hay logs. Juega una vez para generarlos."

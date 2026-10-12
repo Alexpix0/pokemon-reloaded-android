@@ -431,9 +431,23 @@ class GameRepository(private val context: Context) {
         }
     }
 
-    /** Writes one line to logcat (visible from Ajustes -> Logs), so failures can be diagnosed. */
+    /**
+     * Writes one line to logcat, which is what the log screen reads, and also to a small file.
+     *
+     * logcat only holds what the running process printed, so anything logged before the phone was
+     * restarted is gone - which is exactly when somebody sits down to report a bug. The file keeps
+     * the last stretch, and is rolled over so it cannot grow without end.
+     */
     private fun trace(message: String) {
         android.util.Log.i("Reloaded", message)
+        runCatching {
+            val file = File(files, "app.log")
+            if (file.length() > 256 * 1024) {
+                File(files, "app.log.1").delete()
+                file.renameTo(File(files, "app.log.1"))
+            }
+            file.appendText("$message\n")
+        }
     }
 
     /**
