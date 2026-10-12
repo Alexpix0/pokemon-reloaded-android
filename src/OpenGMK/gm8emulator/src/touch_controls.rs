@@ -65,13 +65,13 @@ pub const CONTROLS: &[Control] = &[
     Control { key: Key::Alpha5, shape: Shape::Circle { cx: 0.588, cy: 0.055, r: 0.020 }, label: Label::Text("5"), contexts: BATTLE },
     Control { key: Key::Alpha6, shape: Shape::Circle { cx: 0.660, cy: 0.055, r: 0.020 }, label: Label::Text("6"), contexts: BATTLE },
     // Menu / misc keys (second row along the top).
-    Control { key: Key::Space, shape: Shape::Circle { cx: 0.300, cy: 0.145, r: 0.022 }, label: Label::Text("PKM"), contexts: WORLD },
-    Control { key: Key::O, shape: Shape::Circle { cx: 0.372, cy: 0.145, r: 0.022 }, label: Label::Text("O"), contexts: WORLD },
-    Control { key: Key::M, shape: Shape::Circle { cx: 0.444, cy: 0.145, r: 0.022 }, label: Label::Text("M"), contexts: BATTLE },
-    Control { key: Key::E, shape: Shape::Circle { cx: 0.516, cy: 0.145, r: 0.022 }, label: Label::Text("E"), contexts: BATTLE },
-    Control { key: Key::T, shape: Shape::Circle { cx: 0.588, cy: 0.145, r: 0.022 }, label: Label::Text("T"), contexts: WORLD },
-    Control { key: Key::L, shape: Shape::Circle { cx: 0.660, cy: 0.145, r: 0.022 }, label: Label::Text("L"), contexts: WORLD },
-    Control { key: Key::P, shape: Shape::Circle { cx: 0.732, cy: 0.145, r: 0.022 }, label: Label::Text("P"), contexts: WORLD },
+    Control { key: Key::Space, shape: Shape::Circle { cx: 0.300, cy: 0.145, r: 0.022 }, label: Label::Text("PKM"), contexts: WORLD | BATTLE },
+    Control { key: Key::O, shape: Shape::Circle { cx: 0.372, cy: 0.145, r: 0.022 }, label: Label::Text("O"), contexts: WORLD | BATTLE },
+    Control { key: Key::M, shape: Shape::Circle { cx: 0.444, cy: 0.145, r: 0.022 }, label: Label::Text("M"), contexts: WORLD | BATTLE },
+    Control { key: Key::E, shape: Shape::Circle { cx: 0.516, cy: 0.145, r: 0.022 }, label: Label::Text("E"), contexts: WORLD | BATTLE },
+    Control { key: Key::T, shape: Shape::Circle { cx: 0.588, cy: 0.145, r: 0.022 }, label: Label::Text("T"), contexts: WORLD | BATTLE },
+    Control { key: Key::L, shape: Shape::Circle { cx: 0.660, cy: 0.145, r: 0.022 }, label: Label::Text("L"), contexts: WORLD | BATTLE },
+    Control { key: Key::P, shape: Shape::Circle { cx: 0.732, cy: 0.145, r: 0.022 }, label: Label::Text("P"), contexts: WORLD | BATTLE },
     // Main actions.
     Control { key: Key::Z, shape: Shape::Circle { cx: 0.930, cy: 0.840, r: 0.034 }, label: Label::Text("Z"), contexts: WORLD | BATTLE },
     Control { key: Key::X, shape: Shape::Circle { cx: 0.800, cy: 0.868, r: 0.031 }, label: Label::Text("X"), contexts: WORLD | BATTLE },
@@ -93,7 +93,35 @@ static ROOM: AtomicI32 = AtomicI32::new(-1);
 /// Called by the emulator every frame with the current room id.
 pub fn set_room(room: i32) {
     ROOM.store(room, Ordering::Relaxed);
+    log_state_change(room);
 }
+
+/// Records every change of state, which is what decides which on-screen controls exist.
+///
+/// A report of buttons missing, or in the wrong place, cannot be chased without knowing what the
+/// overlay believed at the time: which room, which group of controls it picked, and how many of
+/// them it counted as active. It only writes when something changes, so it stays quiet while
+/// playing.
+#[cfg(target_os = "android")]
+fn log_state_change(room: i32) {
+    static LAST: AtomicU32 = AtomicU32::new(u32::MAX);
+    let group = u32::from(current_context());
+    if LAST.swap(group, Ordering::Relaxed) == group {
+        return
+    }
+    let active = (0..CONTROLS.len()).filter(|index| is_active(*index)).count();
+    eprintln!(
+        "[overlay] sala {} -> grupo {} ({} botones activos de {})",
+        room,
+        group,
+        active,
+        CONTROLS.len()
+    );
+}
+
+/// Nothing to report where there is no overlay.
+#[cfg(not(target_os = "android"))]
+fn log_state_change(_room: i32) {}
 
 /// Which group of controls the current game state needs.
 pub fn current_context() -> u8 {

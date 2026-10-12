@@ -455,10 +455,10 @@ impl Game {
             n if n < 0.into() => Scaling::Aspect(n.into_inner()),
             n => Scaling::Fixed(n.into_inner()),
         };
-        // If the player pinned the shape from the launcher, the game's own request must not undo
-        // it. This game asks for "fill" while loading a save, which is what stretched the picture
-        // back after the title screen had already looked right.
-        let scaling = crate::render::pinned_scaling().unwrap_or(scaling);
+        // The player's choice is applied once, when the game starts, and is deliberately not forced
+        // here. This game changes the scaling five times of its own accord, mostly around battles
+        // and their animations, and overriding those left the picture and the camera out of step -
+        // which showed up as a battle drawn all over the screen.
         self.scaling = scaling;
         if let Scaling::Fixed(n) = scaling {
             let (region_w, region_h) =
