@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.SettingsBackupRestore
 import androidx.compose.material.icons.filled.Storage
@@ -60,6 +61,7 @@ fun SettingsScreen(
     onLog: () -> Unit,
     onAbout: () -> Unit,
     onControls: () -> Unit,
+    onMySaves: () -> Unit,
     onUpdateFound: (Update.Release) -> Unit,
     bottomBar: @Composable () -> Unit = {},
 ) {
@@ -163,11 +165,24 @@ fun SettingsScreen(
 
             SettingsGroup("Partidas") {
                 NavRow(
+                    icon = Icons.Filled.Save,
+                    title = "Mis partidas",
+                    subtitle = if (installed == null) {
+                        "El juego no esta descargado"
+                    } else {
+                        "Ve cuales partidas tienes guardadas en el juego"
+                    },
+                    items = 3,
+                    index = 0,
+                    enabled = installed != null,
+                    onClick = onMySaves,
+                )
+                NavRow(
                     icon = Icons.Filled.SaveAlt,
                     title = "Exportar partidas",
                     subtitle = "Tus partidas, equipos y personajes en un zip",
-                    items = 2,
-                    index = 0,
+                    items = 3,
+                    index = 1,
                     enabled = installed != null,
                     onClick = { exportSaves.launch("partidas-reloaded.zip") },
                 )
@@ -175,8 +190,8 @@ fun SettingsScreen(
                     icon = Icons.Filled.SettingsBackupRestore,
                     title = "Importar partidas",
                     subtitle = "Restaura un zip; reemplaza las partidas actuales",
-                    items = 2,
-                    index = 1,
+                    items = 3,
+                    index = 2,
                     enabled = installed != null,
                     onClick = { importSaves.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
                 )

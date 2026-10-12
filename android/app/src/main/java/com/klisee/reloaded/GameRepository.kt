@@ -69,6 +69,123 @@ class GameRepository(private val context: Context) {
      */
     private val saveFolders = listOf("partidas", "equipos", "char_custom")
 
+    /** One of the game's save slots, described the way its own "Cargar" screen describes it. */
+    data class SaveSlot(
+        val index: Int,
+        val name: String?,
+        val seen: String?,
+        val caught: String?,
+        val place: String?,
+    )
+
+    object Slots {
+        /** How many slots the game's load screen offers. */
+        const val COUNT = 3
+    }
+
+    /**
+     * The slots the game has, read from the little summary file it writes beside each save.
+     *
+     * `reloaded<N>.nfo` is plain text with one field per line, in the order the game writes it: the
+     * trainer's name, how many Pokemon have been seen and caught, where the save was made, the
+     * character's sprite and the Pokemon beside them. Reading that file is what lets the app show
+     * exactly what the game's own load screen shows, without guessing at anything.
+     *
+     * A slot counts as used when any `reloaded<N>.*` file exists for it: the save itself is the
+     * `.savc`, while the `.data` and `.nfo` only describe it.
+     */
+    fun saveSlots(): List<SaveSlot> {
+        val folder = File(gameDir, "data/partidas")
+        val pattern = Regex("^reloaded(\\d+)\\.[a-z]+$", RegexOption.IGNORE_CASE)
+        val used = folder.listFiles().orEmpty()
+            .mapNotNull { pattern.find(it.name)?.groupValues?.get(1)?.toIntOrNull() }
+            .toSet()
+
+        return (1..maxOf(Slots.COUNT, used.maxOrNull() ?: 0)).map { index ->
+            if (index !in used) {
+                return@map SaveSlot(index, null, null, null, null)
+            }
+            val lines = runCatching { File(folder, "reloaded$index.nfo").readLines() }.getOrDefault(emptyList())
+                // The game leaves a blank line after the trainer's name, and counting it as a field
+                // shifted every value by one: the seen count came out empty and the place came out
+                // as the number of captured.
+                .filter { it.isNotBlank() }
+            fun field(at: Int) = lines.getOrNull(at)?.trim()?.takeIf { it.isNotEmpty() }
+            SaveSlot(index, field(0), field(1), field(2), field(3))
+        }
+    }
+
+    /**
+     * Restores one slot from a zip, into the slot that was asked for.
+     *
+     * The files inside an exported slot carry their own number - `reloaded1.savc` and the ones that
+     * describe it - so importing them as they are would always put them back where they came from.
+     * They are renamed on the way in instead, which is what turns "export from slot 1, import into
+     * slot 3" into moving a save. The suffix is kept, so a backup stays a backup.
+     */
+    suspend fun importSlot(uri: Uri, index: Int): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val folder = File(gameDir, "data/partidas")
+            if (!folder.isDirectory) error("Primero instala el juego.")
+            val numbered = Regex("^reloaded\\d+(\\.|_)(.*)$", RegexOption.IGNORE_CASE)
+            var written = 0
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                ZipInputStream(input.buffered()).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val file = entry.name.substringAfterLast('/')
+                        val match = numbered.find(file)
+                        // Only a slot's own files, and only from the saves folder.
+                        if (!entry.isDirectory && entry.name.startsWith("partidas/") && match != null) {
+                            val separator = match.groupValues[1]
+                            val rest = match.groupValues[2]
+                            val target = File(folder, "reloaded$index$separator$rest")
+                            target.outputStream().use { zip.copyTo(it) }
+                            written++
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+            if (written == 0) error("Ese zip no trae ninguna partida.")
+            written
+        }
+    }
+
+    /**
+     * Deletes a slot: the save itself, the files that describe it, and the backup the game keeps
+     * beside it. The backup goes too, because leaving it behind would let the game offer to restore
+     * the very save that was meant to be gone.
+     */
+    suspend fun deleteSlot(index: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val folder = File(gameDir, "data/partidas")
+            val files = folder.listFiles().orEmpty()
+                .filter { it.name.startsWith("reloaded$index.") || it.name.startsWith("reloaded${index}_") }
+            if (files.isEmpty()) error("Esa partida ya no esta.")
+            files.forEach { it.delete() }
+        }
+    }
+
+    /** Zips a single slot, so one save can be carried on its own. */
+    suspend fun exportSlot(index: Int): Result<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            val folder = File(gameDir, "data/partidas")
+            val files = folder.listFiles().orEmpty().filter { it.name.startsWith("reloaded$index.") }
+            if (files.isEmpty()) error("Esa partida esta vacia.")
+            val out = File(context.cacheDir, "partida$index.zip")
+            ZipOutputStream(out.outputStream().buffered()).use { zip ->
+                files.forEach { file ->
+                    zip.putNextEntry(ZipEntry("partidas/" + file.name))
+                    file.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+            out
+        }
+    }
+
     /** Zips the saves into the cache, ready to be handed to a file picker. */
     suspend fun exportSaves(): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
