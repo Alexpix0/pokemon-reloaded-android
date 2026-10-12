@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -71,6 +72,7 @@ fun HomeScreen(
     onLog: () -> Unit,
     onAbout: () -> Unit,
     onLaunch: () -> Unit,
+    launching: Boolean = false,
     onSettings: () -> Unit,
     bottomBar: @Composable () -> Unit = {},
 ) {
@@ -162,13 +164,20 @@ fun HomeScreen(
                 Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = onLaunch,
-                        enabled = installed != null && !busy,
+                        enabled = installed != null && !busy && !launching,
                         modifier = Modifier.fillMaxWidth().height(72.dp),
                         shape = MaterialTheme.shapes.extraLarge,
                     ) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(28.dp))
+                        if (launching) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 3.dp,
+                            )
+                        } else {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(28.dp))
+                        }
                         Spacer(Modifier.width(12.dp))
-                        Text("Jugar", style = MaterialTheme.typography.titleLarge)
+                        Text(if (launching) "Cargando..." else "Jugar", style = MaterialTheme.typography.titleLarge)
                     }
                     if (installed == null) {
                         Text(

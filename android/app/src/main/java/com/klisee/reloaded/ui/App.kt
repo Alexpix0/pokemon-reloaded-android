@@ -163,6 +163,7 @@ fun App(repo: GameRepository, prefs: Preferences) {
                             launching = true
                             Emulator.start(context)
                         },
+                        launching = launching,
                         onSettings = { scope.launch { pagerState.animateScrollToPage(Tab.Settings.ordinal) } },
                     )
                     Tab.Log -> LogScreen(repo)
@@ -187,26 +188,6 @@ fun App(repo: GameRepository, prefs: Preferences) {
                 },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
-
-            if (launching) {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        LoadingIndicator()
-                        Spacer(Modifier.height(24.dp))
-                        Text("Cargando el juego...", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "El juego tarda unos segundos en leer sus datos",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
         }
     }
 }
