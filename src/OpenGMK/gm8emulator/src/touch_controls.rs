@@ -109,14 +109,33 @@ fn log_state_change(room: i32) {
     if LAST.swap(group, Ordering::Relaxed) == group {
         return
     }
+    let (window_w, window_h) = ramen::platform::android::window_size();
     let active = (0..CONTROLS.len()).filter(|index| is_active(*index)).count();
-    eprintln!(
-        "[overlay] sala {} -> grupo {} ({} botones activos de {})",
-        room,
-        group,
-        active,
-        CONTROLS.len()
-    );
+    eprintln!("[overlay] sala {} -> grupo {} | ventana {}x{} | {} de {} activos", room, group, window_w, window_h, active, CONTROLS.len());
+    // Every control, one per line, so a report of "buttons missing" can be checked against what the
+    // overlay actually decided: which key, where it was put, how big it is, and whether it counted
+    // as visible. Normalised coordinates are fractions of the window, so they can be compared
+    // between devices of any size.
+    for (index, control) in CONTROLS.iter().enumerate() {
+        let (at, size) = match control.shape {
+            Shape::Circle { cx, cy, r } => (format!("{:.3},{:.3}", cx, cy), format!("r={:.3}", r)),
+            Shape::Rect { cx, cy, w, h } => (format!("{:.3},{:.3}", cx, cy), format!("{:.3}x{:.3}", w, h)),
+        };
+        let name = match control.label {
+            Label::None => "",
+            Label::Arrow(_) => "flecha",
+            Label::Text(text) => text,
+        };
+        eprintln!(
+            "[overlay]   {:>2}. {:<6} {:<12} en ({}) {} -> {}",
+            index,
+            name,
+            format!("{:?}", control.key),
+            at,
+            size,
+            if is_active(index) { "visibles" } else { "ocultos" }
+        );
+    }
 }
 
 /// Nothing to report where there is no overlay.

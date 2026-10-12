@@ -455,10 +455,10 @@ impl Game {
             n if n < 0.into() => Scaling::Aspect(n.into_inner()),
             n => Scaling::Fixed(n.into_inner()),
         };
-        // The player's choice is applied once, when the game starts, and is deliberately not forced
-        // here. This game changes the scaling five times of its own accord, mostly around battles
-        // and their animations, and overriding those left the picture and the camera out of step -
-        // which showed up as a battle drawn all over the screen.
+        // Every request is reported. This game changes the scaling of its own accord around battles
+        // and their animations, and a picture that ends up out of step with the camera cannot be
+        // explained without knowing what was asked for, and in which order.
+        eprintln!("[video] el juego pide escalado {:?} (region {}x{})", scaling, self.unscaled_width, self.unscaled_height);
         self.scaling = scaling;
         if let Scaling::Fixed(n) = scaling {
             let (region_w, region_h) =
