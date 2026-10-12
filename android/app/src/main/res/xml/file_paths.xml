@@ -4,7 +4,10 @@
   it, which is the only way an app is allowed to install a package from its own storage.
 -->
 <paths>
-    <cache-path name="update" path="update.apk" />
-    <!-- The log written out for sharing: a file is easier to send than a wall of text. -->
-    <cache-path name="logs" path="logs/" />
+    <!--
+      The whole cache directory, not one file by name. Naming the files matched nothing and the
+      lookup failed with "Failed to find configured root", which left the installer with no file to
+      open; the log written for sharing lives in here too.
+    -->
+    <cache-path name="cache" path="." />
 </paths>
