@@ -111,14 +111,27 @@ pub fn current_context() -> u8 {
     }
 }
 
+/// True while the player is on a pad. The on-screen controls then step aside, because somebody
+/// holding a controller does not want buttons under their thumbs; the first touch on the screen
+/// brings them back.
+static PAD_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_pad_active(active: bool) {
+    PAD_ACTIVE.store(active, Ordering::Relaxed);
+}
+
+pub fn pad_active() -> bool {
+    PAD_ACTIVE.load(Ordering::Relaxed)
+}
+
 pub fn is_active(index: usize) -> bool {
-    CONTROLS[index].contexts & current_context() != 0
+    !pad_active() && CONTROLS[index].contexts & current_context() != 0
 }
 
 /// The joystick drives the arrow keys, which is how the game's menus (the ones that still show
 /// controls) and the overworld are navigated.
 pub fn joystick_active() -> bool {
-    current_context() & (WORLD | BATTLE) != 0
+    !pad_active() && current_context() & (WORLD | BATTLE) != 0
 }
 
 /// Returns the index of the control containing the normalised point, if any.
@@ -182,8 +195,19 @@ pub fn joystick_dirs(nx: f32, ny: f32, ww: f32, wh: f32) -> [bool; 4] {
     let r = JOYSTICK_R * wh;
     let dx = (nx - JOYSTICK_CX) * ww;
     let dy = (ny - JOYSTICK_CY) * wh;
-    let dead = JOYSTICK_DEAD * r;
-    [dy < -dead, dy > dead, dx < -dead, dx > dead]
+    stick_dirs(dx / r, dy / r)
+}
+
+/// Which directions a stick pushed by (dx, dy) is asking for: up, down, left, right. Both are in
+/// the range -1..1, and this is the same dead zone the on-screen joystick uses - a physical pad's
+/// stick goes through here too, so both feel identical.
+pub fn stick_dirs(dx: f32, dy: f32) -> [bool; 4] {
+    [
+        dy < -JOYSTICK_DEAD,
+        dy > JOYSTICK_DEAD,
+        dx < -JOYSTICK_DEAD,
+        dx > JOYSTICK_DEAD,
+    ]
 }
 
 /// The stick's offset from its centre, in units of its radius (for drawing the knob).

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use android_activity::{
-    input::{InputEvent, KeyAction, MotionAction},
+    input::{Axis, InputEvent, KeyAction, MotionAction},
     AndroidApp, PollEvent,
 };
 
@@ -29,6 +29,21 @@ const AKEYCODE_DPAD_LEFT: AKeyCode = 21;
 const AKEYCODE_DPAD_RIGHT: AKeyCode = 22;
 const AKEYCODE_ESCAPE: AKeyCode = 111;
 
+/// Gamepad buttons. Android reports the same keycodes for every pad, whatever the brand, so the
+/// names below are the physical ones the player sees.
+const AKEYCODE_BUTTON_A: AKeyCode = 96;
+const AKEYCODE_BUTTON_B: AKeyCode = 97;
+const AKEYCODE_BUTTON_X: AKeyCode = 99;
+const AKEYCODE_BUTTON_Y: AKeyCode = 100;
+const AKEYCODE_BUTTON_L1: AKeyCode = 102;
+const AKEYCODE_BUTTON_R1: AKeyCode = 103;
+const AKEYCODE_BUTTON_L2: AKeyCode = 104;
+const AKEYCODE_BUTTON_R2: AKeyCode = 105;
+const AKEYCODE_BUTTON_THUMBL: AKeyCode = 106;
+const AKEYCODE_BUTTON_THUMBR: AKeyCode = 107;
+const AKEYCODE_BUTTON_START: AKeyCode = 108;
+const AKEYCODE_BUTTON_SELECT: AKeyCode = 109;
+
 const LETTERS: [Key; 26] = [
     Key::A, Key::B, Key::C, Key::D, Key::E, Key::F, Key::G, Key::H, Key::I, Key::J, Key::K, Key::L,
     Key::M, Key::N, Key::O, Key::P, Key::Q, Key::R, Key::S, Key::T, Key::U, Key::V, Key::W, Key::X,
@@ -36,6 +51,13 @@ const LETTERS: [Key; 26] = [
 ];
 
 fn map_key(keycode: AKeyCode) -> Option<Key> {
+    // A layout saved by the launcher's control screen wins over the built-in one; anything it
+    // doesn't mention keeps the default below.
+    if let Some(map) = std::sync::OnceLock::get(&MAPPED_BUTTONS) {
+        if let Some(mapped) = map.lock().ok().and_then(|map| map.get(&keycode).copied()) {
+            return Some(mapped)
+        }
+    }
     Some(match keycode {
         AKEYCODE_DEL => Key::Backspace,
         AKEYCODE_TAB => Key::Tab,
@@ -46,6 +68,34 @@ fn map_key(keycode: AKeyCode) -> Option<Key> {
         AKEYCODE_DPAD_DOWN => Key::DownArrow,
         AKEYCODE_DPAD_LEFT => Key::LeftArrow,
         AKEYCODE_DPAD_RIGHT => Key::RightArrow,
+
+        // Gamepad. The game only ever reads the keyboard, so a controller plays by pressing the
+        // same keys the keyboard does. That is the whole trick, and it needs nothing from the game:
+        //
+        //   D-pad                  -> arrow keys
+        //   A (Xbox/Nintendo) / X (PS)      -> Z
+        //   B (Xbox/Nintendo) / circle (PS) -> X
+        //   X (Xbox/Nintendo) / square (PS) -> C
+        //   Y (Xbox/Nintendo) / triangle    -> V
+        //   select, share, view, minus      -> Enter
+        //   start, options, menu, plus      -> Space
+        //   R1 / RB / R                      -> B
+        //   L1 / LB / L                      -> M
+        //   R2 / RT / ZR                     -> O
+        //   L2 / LT / ZL                     -> S
+        //   stick press (either one)         -> E
+        AKEYCODE_BUTTON_A => Key::Z,
+        AKEYCODE_BUTTON_B => Key::X,
+        AKEYCODE_BUTTON_X => Key::C,
+        AKEYCODE_BUTTON_Y => Key::V,
+        AKEYCODE_BUTTON_SELECT => Key::Return,
+        AKEYCODE_BUTTON_START => Key::Space,
+        AKEYCODE_BUTTON_R1 => Key::B,
+        AKEYCODE_BUTTON_L1 => Key::M,
+        AKEYCODE_BUTTON_R2 => Key::O,
+        AKEYCODE_BUTTON_L2 => Key::S,
+        AKEYCODE_BUTTON_THUMBL | AKEYCODE_BUTTON_THUMBR => Key::E,
+
         _ => return None,
     })
 }
@@ -57,6 +107,137 @@ fn map_letter(keycode: AKeyCode) -> Option<Key> {
 
 fn mapped_key(keycode: i32) -> Option<Key> {
     map_key(keycode).or_else(|| map_letter(keycode))
+}
+
+/// The pad layout the launcher's control screen saved, keyed by Android key code. The contents are
+/// replaced on every run rather than cached, because the engine and the launcher share one process
+/// and the layout can change between one run of the game and the next.
+static MAPPED_BUTTONS: std::sync::OnceLock<Mutex<HashMap<AKeyCode, Key>>> = std::sync::OnceLock::new();
+
+/// Whether the physical sticks move the player.
+static STICK_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Which arrow keys the physical stick is holding (bit 0 up, 1 down, 2 left, 3 right). Kept apart
+/// from the on-screen joystick's state so neither can release a key the other is holding.
+static STICK_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Reads the video mode the launcher saved. Only one thing matters here: whether the picture keeps
+/// the shape the game was drawn for, or stretches to fill the screen.
+fn load_video() {
+    let path = PathBuf::from(format!("/data/data/{}/files/video.conf", PACKAGE_DIR));
+    if let Ok(text) = fs::read_to_string(&path) {
+        for line in text.lines() {
+            let Some((name, value)) = line.trim().split_once('=') else { continue };
+            if name.trim() != "scaling" {
+                continue
+            }
+            let value = value.trim();
+            if value == "aspect" || value == "full" {
+                eprintln!("[video] escalado: {}", value);
+                // Read by the engine when it builds its renderer.
+                std::env::set_var("OPENGMK_SCALING", value);
+            }
+        }
+    }
+}
+
+/// Reads the layout the launcher's control screen left behind. Best effort: with no file, the
+/// built-in layout is used exactly as before.
+fn load_controls() {
+    let path = PathBuf::from(format!("/data/data/{}/files/controls.conf", PACKAGE_DIR));
+    let mut buttons = HashMap::new();
+    if let Ok(text) = fs::read_to_string(&path) {
+        eprintln!("[pad] leyendo {}", path.display());
+        for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue
+                }
+                eprintln!("[pad]   {}", line);
+            let Some((name, value)) = line.split_once('=') else { continue };
+            if name.trim() == "stick" {
+                STICK_ENABLED.store(value.trim() != "0", std::sync::atomic::Ordering::Relaxed);
+            } else if name.trim() == "pad" {
+                // A pad was connected when the game started, so start with the controls out of the
+                // way; touching the screen brings them back.
+                crate::touch_controls::set_pad_active(value.trim() != "0");
+            } else if let (Ok(code), Some(key)) = (name.trim().parse::<AKeyCode>(), parse_key(value.trim())) {
+                buttons.insert(code, key);
+            }
+        }
+    }
+    // Replaced rather than cached: the launcher can change the layout while the app is still alive.
+    if let Ok(mut map) = MAPPED_BUTTONS.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        *map = buttons;
+    }
+}
+
+/// The key names the control screen can write into `controls.conf`.
+fn parse_key(name: &str) -> Option<Key> {
+    let upper = name.trim().to_ascii_uppercase();
+    if upper.len() == 1 {
+        let byte = upper.as_bytes()[0];
+        if byte.is_ascii_uppercase() {
+            return LETTERS.get(usize::from(byte - b'A')).copied()
+        }
+    }
+    Some(match upper.as_str() {
+        "RETURN" | "ENTER" => Key::Return,
+        "SPACE" => Key::Space,
+        "ESCAPE" => Key::Escape,
+        "TAB" => Key::Tab,
+        "BACKSPACE" => Key::Backspace,
+        "UP" => Key::UpArrow,
+        "DOWN" => Key::DownArrow,
+        "LEFT" => Key::LeftArrow,
+        "RIGHT" => Key::RightArrow,
+        _ => return None,
+    })
+}
+
+/// Holds and releases the arrow keys the physical stick asks for, so pushing it feels exactly like
+/// the on-screen joystick.
+fn stick_update(x: f32, y: f32) {
+    let dirs = crate::touch_controls::stick_dirs(x, y);
+    let mut state = STICK_STATE.load(std::sync::atomic::Ordering::Relaxed);
+    let before = state;
+    for (index, held) in dirs.iter().enumerate() {
+        let bit = 1u32 << index;
+        let was = state & bit != 0;
+        if *held && !was {
+            android::push_input(ramen::platform::android::InputEvent::KeyDown { key: JOYSTICK_KEYS[index], text: None });
+        } else if !*held && was {
+            android::push_input(ramen::platform::android::InputEvent::KeyUp { key: JOYSTICK_KEYS[index] });
+        }
+        if *held {
+            state |= bit;
+        } else {
+            state &= !bit;
+        }
+    }
+    STICK_STATE.store(state, std::sync::atomic::Ordering::Relaxed);
+    if state != before {
+        // Only when the direction actually changes, so holding a direction does not flood logcat.
+        eprintln!("[pad] ejes x={:.2} y={:.2} -> direcciones {}", x, y, state);
+    }
+}
+
+/// The value of one axis of a motion event. Axis values belong to the event, and the crate reaches
+/// them through its first pointer, so there has to be one.
+fn axis_value(motion: &android_activity::input::MotionEvent, axis: Axis) -> f32 {
+    if motion.pointer_count() == 0 {
+        return 0.0
+    }
+    motion.pointer_at_index(0).axis_value(axis)
+}
+
+fn stick_release() {
+    let state = STICK_STATE.swap(0, std::sync::atomic::Ordering::Relaxed);
+    for (index, key) in JOYSTICK_KEYS.iter().enumerate() {
+        if state & (1 << index) != 0 {
+            android::push_input(ramen::platform::android::InputEvent::KeyUp { key: *key });
+        }
+    }
 }
 
 /// `Keycode` is a repr(i32) enum, so the raw AKEYCODE_* value is recoverable.
@@ -83,9 +264,20 @@ fn control_key_up(index: usize) {
     android::push_input(ramen::platform::android::InputEvent::KeyUp { key: crate::touch_controls::CONTROLS[index].key });
 }
 
+/// Pointers whose press was swallowed to bring the on-screen controls back, so that their release
+/// is ignored too instead of reaching the game as a stray mouse-up.
+static SWALLOWED_INPUTS: Mutex<Option<std::collections::HashSet<i32>>> = Mutex::new(None);
+
 /// A touch on an on-screen control presses the key that control maps to; any other touch is
 /// forwarded to the game as a mouse, exactly as before.
 fn pointer_down(id: i32, x: f32, y: f32) {
+    // The first touch after using a pad only brings the controls back. It must not also land in the
+    // game as a click, or reaching for the on-screen buttons would act on whatever is under them.
+    if crate::touch_controls::pad_active() {
+        crate::touch_controls::set_pad_active(false);
+        SWALLOWED_INPUTS.lock().unwrap().get_or_insert_with(std::collections::HashSet::new).insert(id);
+        return
+    }
     let (w, h) = android::window_size();
     let (wf, hf) = (w as f32, h as f32);
     if wf > 0.0 && hf > 0.0 && crate::touch_controls::joystick_hit(x / wf, y / hf, wf, hf) {
@@ -104,6 +296,9 @@ fn pointer_down(id: i32, x: f32, y: f32) {
 }
 
 fn pointer_up(id: i32, x: f32, y: f32) {
+    if SWALLOWED_INPUTS.lock().unwrap().get_or_insert_with(std::collections::HashSet::new).remove(&id) {
+        return
+    }
     if is_joystick_pointer(id) {
         joystick_release();
         return
@@ -277,6 +472,10 @@ fn translate(event: &InputEvent) {
                     return
                 }
                 if let Some(k) = mapped_key(code) {
+                    // A real key press means a pad or a keyboard is in the player's hands, so the
+                    // on-screen controls get out of the way.
+                    crate::touch_controls::set_pad_active(true);
+                    eprintln!("[pad] tecla {} -> {:?}", code, k);
                     android::push_input(ramen::platform::android::InputEvent::KeyDown { key: k, text: None });
                 }
             },
@@ -287,37 +486,58 @@ fn translate(event: &InputEvent) {
             },
             _ => {},
         },
-        InputEvent::MotionEvent(motion) => match motion.action() {
-            MotionAction::Down | MotionAction::PointerDown => {
-                if let Some((id, x, y)) = changed_pointer(motion) {
-                    pointer_down(id, x, y);
-                }
-            },
-            MotionAction::Up | MotionAction::PointerUp => {
-                if let Some((id, x, y)) = changed_pointer(motion) {
-                    pointer_up(id, x, y);
-                }
-            },
-            MotionAction::Move | MotionAction::HoverMove => {
-                for p in motion.pointers() {
-                    if is_joystick_pointer(p.pointer_id()) {
-                        joystick_update(p.x(), p.y());
-                    } else if !pointer_is_control(p.pointer_id()) {
-                        android::push_input(ramen::platform::android::InputEvent::PointerMoved { x: p.x(), y: p.y() });
+        InputEvent::MotionEvent(motion) => {
+            // A pad's stick arrives as a generic motion event, not as a key, so its axes have to be
+            // read from the event itself rather than from a pointer.
+            if motion.source().is_joystick_class() {
+                crate::touch_controls::set_pad_active(true);
+                if STICK_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+                    let (mut x, mut y) = (axis_value(motion, Axis::X), axis_value(motion, Axis::Y));
+                    // A d-pad is usually reported as a hat axis rather than as keys, and it has to
+                    // win over the stick when it is pressed: a resting stick is not always at exactly
+                    // zero, and requiring that is what kept the d-pad from doing anything.
+                    let (hat_x, hat_y) = (axis_value(motion, Axis::HatX), axis_value(motion, Axis::HatY));
+                    if hat_x != 0.0 || hat_y != 0.0 {
+                        x = hat_x;
+                        y = hat_y;
                     }
+                    stick_update(x, y);
                 }
-            },
-            MotionAction::Cancel => {
-                joystick_release();
-                let ids: Vec<i32> =
-                    POINTER_CONTROLS.lock().unwrap().as_ref().map(|m| m.keys().copied().collect()).unwrap_or_default();
-                for id in ids {
-                    if let Some(index) = POINTER_CONTROLS.lock().unwrap().get_or_insert_with(HashMap::new).remove(&id) {
-                        control_key_up(index);
+                return
+            }
+
+            match motion.action() {
+                MotionAction::Down | MotionAction::PointerDown => {
+                    if let Some((id, x, y)) = changed_pointer(motion) {
+                        pointer_down(id, x, y);
                     }
-                }
-            },
-            _ => {},
+                },
+                MotionAction::Up | MotionAction::PointerUp => {
+                    if let Some((id, x, y)) = changed_pointer(motion) {
+                        pointer_up(id, x, y);
+                    }
+                },
+                MotionAction::Move | MotionAction::HoverMove => {
+                    for p in motion.pointers() {
+                        if is_joystick_pointer(p.pointer_id()) {
+                            joystick_update(p.x(), p.y());
+                        } else if !pointer_is_control(p.pointer_id()) {
+                            android::push_input(ramen::platform::android::InputEvent::PointerMoved { x: p.x(), y: p.y() });
+                        }
+                    }
+                },
+                MotionAction::Cancel => {
+                    joystick_release();
+                    let ids: Vec<i32> =
+                        POINTER_CONTROLS.lock().unwrap().as_ref().map(|m| m.keys().copied().collect()).unwrap_or_default();
+                    for id in ids {
+                        if let Some(index) = POINTER_CONTROLS.lock().unwrap().get_or_insert_with(HashMap::new).remove(&id) {
+                            control_key_up(index);
+                        }
+                    }
+                },
+                _ => {},
+            }
         },
         _ => {},
     }
@@ -389,6 +609,10 @@ extern "C" {
 /// on, because android-activity asserts it, so the pump cannot live on a worker thread.
 /// The emulator itself runs on a worker thread instead.
 pub fn android_entry(app: AndroidApp) {
+
+    // The pad layout and the video mode are read once, before any input can arrive.
+    load_controls();
+    load_video();
 
     publish_window(&app);
 

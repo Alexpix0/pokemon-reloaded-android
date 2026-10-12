@@ -5,11 +5,21 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,13 +32,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.klisee.reloaded.Emulator
 import com.klisee.reloaded.GameRepository
 import com.klisee.reloaded.Preferences
 import kotlinx.coroutines.launch
 
 /** Screens reached from a tab rather than being tabs themselves. */
-private enum class Pushed { About }
+private enum class Pushed { About, Controls }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun App(repo: GameRepository, prefs: Preferences) {
     var onboarded by remember { mutableStateOf(prefs.onboardingDone) }
@@ -37,7 +52,20 @@ fun App(repo: GameRepository, prefs: Preferences) {
     // Bumped whenever a tab comes into view, so the pages re-read the game's state. Without it,
     // deleting the game in Ajustes left "Jugar" enabled back in Inicio.
     var revision by remember { mutableStateOf(0) }
+    // The engine spends several seconds loading the game's data behind a window the size of a stamp.
+    // This covers that gap with something that says what is happening, and goes away by itself when
+    // the launcher comes back to the front.
+    var launching by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) launching = false
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Swiping between the tabs is more comfortable than aiming at a button, so the three of them
     // are pages of a pager. The bar and the pager are kept in step in both directions.
@@ -77,6 +105,7 @@ fun App(repo: GameRepository, prefs: Preferences) {
 
     when (pushed) {
         Pushed.About -> AboutScreen(onBack = { pushed = null })
+        Pushed.Controls -> ControlsScreen(prefs = prefs, filesDir = context.filesDir, onBack = { pushed = null })
         null -> Box(modifier = Modifier.fillMaxSize()) {
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                 when (Tab.entries[page]) {
@@ -87,6 +116,10 @@ fun App(repo: GameRepository, prefs: Preferences) {
                         onRequestNetwork = { requestNetwork.launch(Manifest.permission.INTERNET) },
                         onLog = { scope.launch { pagerState.animateScrollToPage(Tab.Log.ordinal) } },
                         onAbout = { pushed = Pushed.About },
+                        onLaunch = {
+                            launching = true
+                            Emulator.start(context)
+                        },
                         onSettings = { scope.launch { pagerState.animateScrollToPage(Tab.Settings.ordinal) } },
                     )
                     Tab.Log -> LogScreen(repo)
@@ -96,6 +129,7 @@ fun App(repo: GameRepository, prefs: Preferences) {
                         revision = revision,
                         onLog = { scope.launch { pagerState.animateScrollToPage(Tab.Log.ordinal) } },
                         onAbout = { pushed = Pushed.About },
+                        onControls = { pushed = Pushed.Controls },
                     )
                 }
             }
@@ -109,6 +143,26 @@ fun App(repo: GameRepository, prefs: Preferences) {
                 },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
+
+            if (launching) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        LoadingIndicator()
+                        Spacer(Modifier.height(24.dp))
+                        Text("Cargando el juego...", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "El juego tarda unos segundos en leer sus datos",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }

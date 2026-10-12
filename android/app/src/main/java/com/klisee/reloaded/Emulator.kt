@@ -8,6 +8,11 @@ object Emulator {
     private const val GAME_ACTIVITY = "com.klisee.reloaded.GameActivity"
 
     fun start(context: Context) {
+        // The emulator reads the pad layout and the video mode once, at startup, so they have to be
+        // on disk by now.
+        val prefs = Preferences(context)
+        prefs.writeControls(context.filesDir, connectedPads(context).isNotEmpty())
+        prefs.writeVideo(context.filesDir)
         context.startActivity(Intent().setClassName(context.packageName, GAME_ACTIVITY))
     }
 }

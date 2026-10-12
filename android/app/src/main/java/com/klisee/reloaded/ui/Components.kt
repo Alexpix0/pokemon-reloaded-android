@@ -16,6 +16,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -166,6 +167,30 @@ fun InfoRow(
         items = items,
         index = index,
         modifier = modifier,
+    )
+}
+
+/** A row that picks one option out of a group, the way a radio button does. */
+@Composable
+fun ChoiceRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    items: Int,
+    index: Int,
+    modifier: Modifier = Modifier,
+    onSelect: () -> Unit,
+) {
+    GroupListItem(
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+        supportingContent = { Text(subtitle, style = MaterialTheme.typography.bodyMedium) },
+        leadingContent = { Icon(icon, contentDescription = null) },
+        trailingContent = { RadioButton(selected = selected, onClick = null) },
+        items = items,
+        index = index,
+        modifier = modifier,
+        onClick = onSelect,
     )
 }
 

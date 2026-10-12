@@ -14,10 +14,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.SettingsBackupRestore
 import androidx.compose.material.icons.filled.Storage
@@ -54,6 +57,7 @@ fun SettingsScreen(
     revision: Int = 0,
     onLog: () -> Unit,
     onAbout: () -> Unit,
+    onControls: () -> Unit,
     bottomBar: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -61,6 +65,7 @@ fun SettingsScreen(
     val snackbar = remember { SnackbarHostState() }
     var status by remember(revision) { mutableStateOf(repo.status()) }
     var keepScreenOn by remember { mutableStateOf(prefs.keepScreenOn) }
+    var keepAspect by remember { mutableStateOf(prefs.keepAspect) }
     var confirmingDelete by remember { mutableStateOf(false) }
     val installed = status as? GameRepository.Status.Ready
 
@@ -166,6 +171,46 @@ fun SettingsScreen(
                     index = 1,
                     enabled = installed != null,
                     onClick = { importSaves.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                )
+            }
+
+            SettingsGroup("Mando") {
+                NavRow(
+                    icon = Icons.Filled.SportsEsports,
+                    title = "Controles",
+                    subtitle = "Elige que boton del mando hace cada tecla, y pruebalo",
+                    items = 1,
+                    index = 0,
+                    onClick = onControls,
+                )
+            }
+
+            SettingsGroup("Resolucion") {
+                ChoiceRow(
+                    icon = Icons.Filled.Fullscreen,
+                    title = "Rellenar la pantalla",
+                    subtitle = "La imagen ocupa todo el movil, aunque se deforme un poco",
+                    selected = !keepAspect,
+                    items = 2,
+                    index = 0,
+                    onSelect = {
+                        keepAspect = false
+                        prefs.keepAspect = false
+                        prefs.writeVideo(context.filesDir)
+                    },
+                )
+                ChoiceRow(
+                    icon = Icons.Filled.AspectRatio,
+                    title = "Mantener la proporcion",
+                    subtitle = "El aspecto clasico del PC, con bandas oscuras a los lados",
+                    selected = keepAspect,
+                    items = 2,
+                    index = 1,
+                    onSelect = {
+                        keepAspect = true
+                        prefs.keepAspect = true
+                        prefs.writeVideo(context.filesDir)
+                    },
                 )
             }
 

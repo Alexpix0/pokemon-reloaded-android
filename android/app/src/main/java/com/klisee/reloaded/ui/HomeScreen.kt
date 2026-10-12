@@ -70,6 +70,7 @@ fun HomeScreen(
     onRequestNetwork: () -> Unit,
     onLog: () -> Unit,
     onAbout: () -> Unit,
+    onLaunch: () -> Unit,
     onSettings: () -> Unit,
     bottomBar: @Composable () -> Unit = {},
 ) {
@@ -159,7 +160,7 @@ fun HomeScreen(
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { Emulator.start(context) },
+                        onClick = onLaunch,
                         enabled = installed != null && !busy,
                         modifier = Modifier.fillMaxWidth().height(72.dp),
                         shape = MaterialTheme.shapes.extraLarge,

@@ -20,6 +20,22 @@ pub enum Scaling {
     Full,
 }
 
+/// The video mode the launcher pinned through the environment, if any.
+///
+/// Deliberately not cached: the engine and the launcher share one process, so the value can change
+/// between one run of the game and the next, and a cached one would make the second choice stick.
+/// `None` means the launcher said nothing this engine understands, which leaves the game's own
+/// setting in charge. This exists because the game changes the scaling itself: it asks for "fill"
+/// while loading a save, which undid the player's choice and stretched the picture back.
+pub fn pinned_scaling() -> Option<Scaling> {
+    let value = std::env::var_os("OPENGMK_SCALING")?;
+    match value.to_string_lossy().trim().to_ascii_lowercase().as_str() {
+        "aspect" => Some(Scaling::Aspect(-1.0)),
+        "full" => Some(Scaling::Full),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedTexture {
     width: i32,

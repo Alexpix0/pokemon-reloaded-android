@@ -685,11 +685,17 @@ impl Game {
 
         let mut atlases = AtlasBuilder::new(renderer.max_texture_size() as _);
 
-        let scaling = match settings.scaling {
+        let mut scaling = match settings.scaling {
             0 => Scaling::Full,
             n if n < 0 => Scaling::Aspect(f64::from(n) / 100.0),
             n => Scaling::Fixed(f64::from(n) / 100.0),
         };
+
+        // The launcher can ask for the classic look: the shape the game was drawn for, with bands
+        // at the sides, instead of stretched to fill the screen.
+        if let Some(pinned) = crate::render::pinned_scaling() {
+            scaling = pinned;
+        }
 
         println!("GPU Max Texture Size: {}", renderer.max_texture_size());
 
@@ -1417,6 +1423,19 @@ impl Game {
             // lazy state
             window_caption: room1_caption.clone(),
             window_cursor_gml: gml::mappings::constants::CR_DEFAULT as _,
+            // On a phone the window is created at the room's size, which is a stamp in the corner,
+            // and only grows once a resize arrives. The surface already knows the real size, so
+            // start there instead of showing a tiny picture for the first frames.
+            #[cfg(target_os = "android")]
+            window_inner_size: {
+                let (surface_w, surface_h) = ramen::platform::android::window_size();
+                if surface_w > 0 && surface_h > 0 {
+                    (surface_w, surface_h)
+                } else {
+                    (width, height)
+                }
+            },
+            #[cfg(not(target_os = "android"))]
             window_inner_size: (width, height),
             window_is_logical_dpi: false,
             window_offset_spoof: (0, 0),
@@ -2144,7 +2163,10 @@ impl Game {
                             self.keyboard_lastchar = c.to_string().into();
                             self.keyboard_string = self.keyboard_string.concat(c.to_string().as_bytes());
                         },
-                        Event::Resize((width, height)) => self.window_inner_size = (width as _, height as _),
+                        Event::Resize((width, height)) => {
+                            eprintln!("[video] la ventana pasa a {}x{}", width, height);
+                            self.window_inner_size = (width as _, height as _)
+                        },
                         Event::CloseRequest => self.close_requested = true,
                         _ => (),
                     }
