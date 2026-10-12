@@ -97,6 +97,8 @@ fun App(repo: GameRepository, prefs: Preferences) {
     // A newer build, offered once per run. Nothing is downloaded until the player says so.
     var update by remember { mutableStateOf<Update.Release?>(null) }
     var updating by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
+    var problem by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         val installed = runCatching {
@@ -111,6 +113,8 @@ fun App(repo: GameRepository, prefs: Preferences) {
         UpdateDialog(
             release = release,
             busy = updating,
+            progress = progress,
+            problem = problem,
             onDownload = {
                 val url = release.apkUrl
                 if (url == null) {
@@ -119,15 +123,27 @@ fun App(repo: GameRepository, prefs: Preferences) {
                     update = null
                 } else {
                     updating = true
+                    progress = 0
+                    problem = null
                     scope.launch {
-                        val file = Update.download(url, java.io.File(context.cacheDir, "update.apk")).getOrNull()
+                        val result = Update.download(url, java.io.File(context.cacheDir, "update.apk")) { progress = it }
                         updating = false
-                        update = null
-                        if (file != null) installUpdate(context, file) else openInBrowser(context, release.pageUrl)
+                        val file = result.getOrNull()
+                        if (file == null) {
+                            // It used to fail in silence and open the browser, which looked exactly
+                            // like nothing happening. Now it says so.
+                            problem = "No pude descargar la actualizacion: ${result.exceptionOrNull()?.message}"
+                        } else {
+                            problem = installUpdate(context, file)
+                            if (problem == null) update = null
+                        }
                     }
                 }
             },
-            onDismiss = { update = null },
+            onDismiss = {
+                update = null
+                problem = null
+            },
             onOpenReleases = {
                 openInBrowser(context, Update.RELEASES_PAGE)
                 update = null

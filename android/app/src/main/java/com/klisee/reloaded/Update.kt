@@ -37,15 +37,41 @@ object Update {
         }
     }
 
-    /** Downloads the release's APK so the system installer can be handed a local file. */
-    suspend fun download(url: String, target: File): Result<File> = withContext(Dispatchers.IO) {
+    /**
+     * Downloads the release's APK so the system installer can be handed a local file.
+     *
+     * Reports the bytes as they arrive, because sixty megabytes with no sign of life cannot be told
+     * apart from a download that has died. Everything that happens is also written to the log, since
+     * the failure used to be swallowed and the app simply opened the browser as if nothing was wrong.
+     */
+    suspend fun download(url: String, target: File, onProgress: (Int) -> Unit): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val connection = open(url)
             connection.connect()
-            if (connection.responseCode !in 200..299) error("La descarga respondio ${connection.responseCode}.")
-            connection.inputStream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+            val code = connection.responseCode
+            val total = connection.contentLengthLong
+            trace("update: descarga $code, $total bytes desde $url")
+            if (code !in 200..299) error("La descarga respondio $code.")
+            connection.inputStream.use { input ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var written = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        written += read
+                        if (total > 0) onProgress((written * 100 / total).toInt())
+                    }
+                    trace("update: descargados $written bytes")
+                }
+            }
             target
-        }
+        }.onFailure { trace("update: FALLO la descarga: ${it::class.java.simpleName}: ${it.message}") }
+    }
+
+    private fun trace(message: String) {
+        android.util.Log.i("Reloaded", message)
     }
 
     /**
@@ -82,12 +108,19 @@ object Update {
 
 /**
  * Hands a downloaded APK to the system installer, which is the only thing allowed to replace the
- * app. Android asks the user to allow installs from this app the first time.
+ * app. Android asks the user to allow installs from this app the first time, and if that has not
+ * been granted there is nothing to open - so that case is reported instead of failing quietly.
  */
-fun installUpdate(context: android.content.Context, apk: File) {
-    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
-    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
-        .setDataAndType(uri, "application/vnd.android.package-archive")
-        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(intent) }
+fun installUpdate(context: android.content.Context, apk: File): String? {
+    if (!context.packageManager.canRequestPackageInstalls()) {
+        return "Android no deja instalar desde esta app todavia. Activalo en los ajustes y vuelve a intentarlo."
+    }
+    return runCatching {
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        null
+    }.getOrElse { "No pude abrir el instalador: ${it::class.java.simpleName}: ${it.message}" }
 }
