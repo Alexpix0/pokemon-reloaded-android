@@ -228,14 +228,6 @@ fun MySavesScreen(repo: GameRepository, onBack: () -> Unit) {
                 )
             }
 
-            Text(
-                text = "Si la partida viene de otra ranura, la primera vez que la cargues en el juego " +
-                    "te preguntara si quieres asignarla a esa. Dile que si: a partir de ahi sera suya, " +
-                    "y no volvera a preguntarlo.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
             // One slot at a time is the export and import on each card. This is the whole set: the
             // teams and the custom characters live outside the slots, so they need their own way in
             // and out. One under the other, because side by side the longer label wrapped and left
