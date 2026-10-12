@@ -2326,7 +2326,13 @@ impl Game {
         loop {
             self.process_window_events();
 
-            self.frame()?;
+            // The room goes with the error: the error alone names a function, not where it was
+            // called from, and with 34388 files and hundreds of scripts that is not enough to find
+            // anything. This is what turns a report into something that can be chased.
+            if let Err(e) = self.frame() {
+                println!("Runtime error: {} (room {})", e, self.room.id);
+                return Err(e.into())
+            }
 
             self.capture_recording_frame(&mut current_frame_time, self.room.speed);
             if let Some(SceneChange::End) = self.scene_change {
@@ -2499,7 +2505,13 @@ impl Game {
                 self.set_input_from_frame(frame);
             }
 
-            self.frame()?;
+            // The room goes with the error: the error alone names a function, not where it was
+            // called from, and with 34388 files and hundreds of scripts that is not enough to find
+            // anything. This is what turns a report into something that can be chased.
+            if let Err(e) = self.frame() {
+                println!("Runtime error: {} (room {})", e, self.room.id);
+                return Err(e.into())
+            }
             self.capture_recording_frame(&mut current_frame_time, self.room.speed);
 
             match self.scene_change {
