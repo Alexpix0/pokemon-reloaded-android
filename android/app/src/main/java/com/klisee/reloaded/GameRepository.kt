@@ -48,12 +48,18 @@ class GameRepository(private val context: Context) {
         val meta = readMeta()
         return Status.Ready(
             exe = exe.name,
-            version = meta?.optString("version")?.ifEmpty { null },
+            // Nothing ever recorded a version on install, so it is read off the executable's own
+            // name, which is where the author puts it: "... The Last Beta 1.9.2.2 Full.exe".
+            version = meta?.optString("version")?.ifEmpty { null } ?: versionFromName(exe.name),
             source = meta?.optString("source")?.ifEmpty { null },
             installedAt = meta?.optLong("installedAt", 0L) ?: 0L,
             sizeBytes = meta?.optLong("sizeBytes", 0L) ?: 0L,
         )
     }
+
+    /** The first version-looking number in a name, or null if it has none. */
+    private fun versionFromName(name: String): String? =
+        Regex("""\d+\.\d+(?:\.\d+){1,2}""").find(name)?.value
 
     /** Frees the extracted game, leaving the launcher ready for another import or download. */
     suspend fun deleteGame() = withContext(Dispatchers.IO) {

@@ -78,36 +78,6 @@ fun SettingsScreen(
     var confirmingDelete by remember { mutableStateOf(false) }
     val installed = status as? GameRepository.Status.Ready
 
-    // Export writes the saves out as a zip; import puts one back, replacing the current saves.
-    val exportSaves = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val result = repo.exportSaves()
-            result.onSuccess { file ->
-                val copied = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
-                }.isSuccess
-                file.delete()
-                snackbar.showSnackbar(if (copied) "Partidas exportadas." else "No pude escribir el archivo.")
-            }.onFailure { snackbar.showSnackbar(it.message ?: "No pude exportar las partidas.") }
-        }
-    }
-
-    val importSaves = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val result = repo.importSaves(uri)
-            snackbar.showSnackbar(
-                result.fold(
-                    onSuccess = { count ->
-                        if (count == 1) "Restaurada 1 partida." else "Restauradas $count partidas."
-                    },
-                    onFailure = { it.message ?: "No pude importar las partidas." },
-                ),
-            )
-        }
-    }
-
     if (confirmingDelete) {
         AlertDialog(
             onDismissRequest = { confirmingDelete = false },
@@ -172,28 +142,10 @@ fun SettingsScreen(
                     } else {
                         "Ve cuales partidas tienes guardadas en el juego"
                     },
-                    items = 3,
+                    items = 1,
                     index = 0,
                     enabled = installed != null,
                     onClick = onMySaves,
-                )
-                NavRow(
-                    icon = Icons.Filled.SaveAlt,
-                    title = "Exportar partidas",
-                    subtitle = "Tus partidas, equipos y personajes en un zip",
-                    items = 3,
-                    index = 1,
-                    enabled = installed != null,
-                    onClick = { exportSaves.launch("partidas-reloaded.zip") },
-                )
-                NavRow(
-                    icon = Icons.Filled.SettingsBackupRestore,
-                    title = "Importar partidas",
-                    subtitle = "Restaura un zip; reemplaza las partidas actuales",
-                    items = 3,
-                    index = 2,
-                    enabled = installed != null,
-                    onClick = { importSaves.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
                 )
             }
 

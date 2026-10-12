@@ -163,6 +163,34 @@ fun MySavesScreen(repo: GameRepository, onBack: () -> Unit) {
         }
     }
 
+    val saveAll = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val file = repo.exportSaves().getOrElse {
+                snackbar.showSnackbar("No pude exportar: ${it.message}")
+                return@launch
+            }
+            val copied = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        file.inputStream().use { it.copyTo(out) }
+                    } ?: error("No pude abrir el destino.")
+                }
+            }
+            file.delete()
+            snackbar.showSnackbar(if (copied.isSuccess) "Todo exportado." else "No pude guardar el archivo.")
+        }
+    }
+
+    val restoreEverything = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { repo.importSaves(uri) }
+            snackbar.showSnackbar(result.fold({ "Partidas, equipos y personajes restaurados." }, { "No pude importar: ${it.message}" }))
+            revision++
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -212,6 +240,21 @@ fun MySavesScreen(repo: GameRepository, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            // The whole set, not one slot: the teams and custom characters the game carries over
+            // live outside the slots, so they need their own way in and out.
+            Text(
+                text = "Para llevarte tambien los equipos y los personajes personalizados:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { saveAll.launch("partidas-reloaded.zip") }) { Text("Exportar todo") }
+                TextButton(
+                    onClick = { restoreEverything.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                ) { Text("Importar todo") }
+            }
+
             Spacer(Modifier.height(BottomNavSpace))
         }
     }
