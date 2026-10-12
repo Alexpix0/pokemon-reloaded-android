@@ -30,6 +30,28 @@ const AAUDIO_CALLBACK_RESULT_CONTINUE: i32 = 0;
 /// The mixer currently being pulled by the AAudio callback, if any.
 static MIXER: Mutex<Option<Mixer>> = Mutex::new(None);
 
+/// The output stream, so it can be stopped and resumed when the app goes to the background and
+/// comes back. Set by [open].
+static STREAM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Stops or resumes the output. Without this the music keeps playing behind the home screen, which
+/// is both wrong and how a game that never really paused gives itself away.
+pub fn set_paused(paused: bool) {
+    let stream = STREAM.load(Ordering::Relaxed) as *mut c_void;
+    if stream.is_null() {
+        return
+    }
+    unsafe {
+        if paused {
+            AAudioStream_requestPause(stream);
+            // Drop what is already queued, so the silence arrives now instead of draining first.
+            AAudioStream_requestFlush(stream);
+        } else {
+            let _ = AAudioStream_requestStart(stream);
+        }
+    }
+}
+
 extern "C" {
     fn AAudio_createStreamBuilder(builder: *mut *mut c_void) -> i32;
     fn AAudioStreamBuilder_setDirection(builder: *mut c_void, direction: i32);
@@ -45,6 +67,8 @@ extern "C" {
     fn AAudioStreamBuilder_openStream(builder: *mut c_void, stream: *mut *mut c_void) -> i32;
     fn AAudioStreamBuilder_delete(builder: *mut c_void) -> i32;
     fn AAudioStream_requestStart(stream: *mut c_void) -> i32;
+    fn AAudioStream_requestPause(stream: *mut c_void) -> i32;
+    fn AAudioStream_requestFlush(stream: *mut c_void) -> i32;
     fn AAudioStream_getChannelCount(stream: *mut c_void) -> i32;
     fn AAudioStream_getSampleRate(stream: *mut c_void) -> i32;
 }
@@ -111,6 +135,7 @@ pub fn open(global_volume: Arc<AtomicU32>) -> Result<(usize, ChannelCount, Sampl
 
         let (mixer, handle) = Mixer::new(sample_rate, channels, global_volume);
         *MIXER.lock().unwrap() = Some(mixer);
+        STREAM.store(stream as usize, Ordering::Relaxed);
 
         check(AAudioStream_requestStart(stream), "AAudioStream_requestStart")?;
         eprintln!("[aaudio] salida abierta: {} canales @ {} Hz", channels.get(), sample_rate.get());

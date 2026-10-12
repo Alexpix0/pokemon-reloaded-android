@@ -93,11 +93,108 @@ pub fn log_stubbed_once() {
     });
 }
 
-pub struct PlatformImpl {
+/// Everything EGL owns, plus the surface in use.
+///
+/// The surface does not live in the renderer because it has to be created and destroyed on the
+/// activity thread, at the only moments that thread knows about for sure: when it hands over a new
+/// window and when it takes the old one away. Only the *binding* belongs to the render thread,
+/// because an EGL context can be current on a single thread - the one that owns it.
+pub struct Gl {
     display: EGLDisplay,
-    surface: EGLSurface,
+    config: EGLConfig,
     context: EGLContext,
+    surface: EGLSurface,
+    /// The surface the context is bound to, so binding only happens when it changes.
+    bound: EGLSurface,
+    swap_interval: u32,
 }
+
+static GL: std::sync::Mutex<Option<Gl>> = std::sync::Mutex::new(None);
+
+// SAFETY: the handles are only ever reached through the mutex above, one thread at a time, and the
+// EGL calls made here are the ones EGL allows across threads. Nothing else can touch them.
+unsafe impl Send for Gl {}
+unsafe impl Sync for Gl {}
+
+/// Held for the duration of every frame, so the surface cannot be destroyed while one is being
+/// drawn. The render thread takes it shared and the activity thread takes it exclusively before
+/// detaching: without that, detaching mid-frame leaves that frame clearing a surface that has gone,
+/// which OpenGL answers with `GL_INVALID_OPERATION` - fatal, and what killed the render thread.
+static FRAME: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// Shared guard to hold while a frame is being drawn.
+pub fn frame_guard() -> Option<std::sync::RwLockReadGuard<'static, ()>> {
+    FRAME.read().ok()
+}
+
+/// Exclusive guard, taken before destroying the surface so that no frame is in flight.
+fn detach_guard() -> Option<std::sync::RwLockWriteGuard<'static, ()>> {
+    FRAME.write().ok()
+}
+
+/// Creates the surface for a window the activity has just handed over, while it is still valid.
+/// Deliberately does not touch the context: that belongs to the render thread, and binding it from
+/// another thread takes it away from the one that actually draws.
+pub unsafe fn attach_surface(native_window: *mut c_void) {
+    if native_window.is_null() {
+        return
+    }
+    let Ok(mut slot) = GL.lock() else { return };
+    let Some(gl) = slot.as_mut() else { return };
+    if gl.surface != EGL_NO_SURFACE {
+        return
+    }
+    let surface = eglCreateWindowSurface(gl.display, gl.config, native_window, ptr::null());
+    if surface == EGL_NO_SURFACE {
+        eprintln!("[gl] no pude crear la superficie para la ventana nueva");
+        return
+    }
+    gl.surface = surface;
+}
+
+/// Destroys the surface, while the window it was built on still exists: the only moment EGL can be
+/// told about it cleanly.
+pub unsafe fn detach_surface() {
+    // Waits for any frame in flight to finish before pulling the surface out from under it.
+    let _no_frame = detach_guard();
+    let Ok(mut slot) = GL.lock() else { return };
+    let Some(gl) = slot.as_mut() else { return };
+    if gl.surface == EGL_NO_SURFACE {
+        return
+    }
+    eglDestroySurface(gl.display, gl.surface);
+    gl.surface = EGL_NO_SURFACE;
+}
+
+/// Whether there is a surface to draw to right now.
+pub fn has_surface() -> bool {
+    GL.lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|gl| gl.surface != EGL_NO_SURFACE))
+        .unwrap_or(false)
+}
+
+/// Binds whatever surface is current, if that changed. Called from the render thread at the start of
+/// every frame, because the first thing a frame does is clear the screen: doing that against a
+/// surface that has gone away answers `GL_INVALID_OPERATION`, which the engine treats as fatal, and
+/// that is what killed the render thread and left the screen black for good.
+pub unsafe fn bind_surface() {
+    let Ok(mut slot) = GL.lock() else { return };
+    let Some(gl) = slot.as_mut() else { return };
+    if gl.bound == gl.surface {
+        return
+    }
+    if gl.surface == EGL_NO_SURFACE {
+        eglMakeCurrent(gl.display, EGL_NO_SURFACE, EGL_NO_SURFACE, gl.context);
+    } else {
+        eglMakeCurrent(gl.display, gl.surface, gl.surface, gl.context);
+        eglSwapInterval(gl.display, gl.swap_interval as c_int);
+    }
+    gl.bound = gl.surface;
+}
+
+/// Handle to the EGL state above. Carries nothing itself: every call goes through the shared slot.
+pub struct PlatformImpl;
 
 impl PlatformImpl {
     /// Requests a GLES 3 context, falling back to GLES 2 if unavailable.
@@ -190,7 +287,15 @@ impl PlatformImpl {
             return Err("eglMakeCurrent fallo".into())
         }
 
-        Ok(Self { display, surface, context })
+        *GL.lock().unwrap() = Some(Gl {
+            display,
+            config,
+            context,
+            surface,
+            bound: surface,
+            swap_interval: 1,
+        });
+        Ok(Self)
     }
 
     pub unsafe fn get_function_loader() -> Result<Box<dyn FnMut(&'static str) -> *const c_void>, String> {
@@ -241,16 +346,26 @@ impl PlatformImpl {
     pub unsafe fn clean_function_loader() {}
 
     pub unsafe fn swap_buffers(&self) {
-        eglSwapBuffers(self.display, self.surface);
+        let Ok(slot) = GL.lock() else { return };
+        let Some(gl) = slot.as_ref() else { return };
+        if gl.surface != EGL_NO_SURFACE {
+            eglSwapBuffers(gl.display, gl.surface);
+        }
     }
 
     pub unsafe fn set_swap_interval(&self, n: u32) -> bool {
-        eglSwapInterval(self.display, n as c_int) != 0
+        let Ok(mut slot) = GL.lock() else { return false };
+        let Some(gl) = slot.as_mut() else { return false };
+        gl.swap_interval = n;
+        if gl.bound == EGL_NO_SURFACE {
+            // Nothing bound yet; it is applied when the surface is bound.
+            return true
+        }
+        eglSwapInterval(gl.display, n as c_int) != 0
     }
 
     pub unsafe fn get_swap_interval(&self) -> u32 {
-        // EGL has no portable query for the swap interval.
-        1
+        GL.lock().ok().and_then(|slot| slot.as_ref().map(|gl| gl.swap_interval)).unwrap_or(1)
     }
 
     pub unsafe fn wait_vsync(&self) {
@@ -261,10 +376,14 @@ impl PlatformImpl {
 impl Drop for PlatformImpl {
     fn drop(&mut self) {
         unsafe {
-            eglMakeCurrent(self.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-            eglDestroySurface(self.display, self.surface);
-            eglDestroyContext(self.display, self.context);
-            eglTerminate(self.display);
+            let Ok(mut slot) = GL.lock() else { return };
+            let Some(gl) = slot.take() else { return };
+            eglMakeCurrent(gl.display, EGL_NO_SURFACE, EGL_NO_SURFACE, gl.context);
+            if gl.surface != EGL_NO_SURFACE {
+                eglDestroySurface(gl.display, gl.surface);
+            }
+            eglDestroyContext(gl.display, gl.context);
+            eglTerminate(gl.display);
         }
     }
 }

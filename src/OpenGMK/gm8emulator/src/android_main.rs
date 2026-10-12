@@ -667,10 +667,30 @@ pub fn android_entry(app: AndroidApp) {
                 | android_activity::MainEvent::Resume { .. }
                 | android_activity::MainEvent::GainedFocus
                 | android_activity::MainEvent::Start => {
+                    ramen::platform::android::set_paused(false);
+                    crate::game::audio::set_output_paused(false);
                     publish_window(&game_app);
                     if let Some(window) = game_app.native_window() {
+                        // The activity has given us a window: build the GL surface for it now, while
+                        // it is alive. Building it later, from the render loop, is what left the
+                        // screen black and made EGL complain about a window already connected.
+                        unsafe {
+                            let ptr = window.ptr().as_ptr() as *mut std::ffi::c_void;
+                            crate::render::opengl::egl::attach_surface(ptr);
+                        }
                         android::push_resize(window.width() as u16, window.height() as u16);
                     }
+                },
+                // Going away. The surface is let go on `Pause`/`Stop` as well as on
+                // `TerminateWindow`, because Android does not always send the latter - and a dead
+                // surface left lying around is worse than none: the renderer believes it can draw,
+                // and OpenGL answers with an error that kills the thread.
+                android_activity::MainEvent::TerminateWindow { .. }
+                | android_activity::MainEvent::Pause { .. }
+                | android_activity::MainEvent::Stop => {
+                    ramen::platform::android::set_paused(true);
+                    crate::game::audio::set_output_paused(true);
+                    unsafe { crate::render::opengl::egl::detach_surface() };
                 },
                 android_activity::MainEvent::InputAvailable => {
                     if let Ok(mut iter) = game_app.input_events_iter() {

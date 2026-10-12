@@ -558,6 +558,14 @@ pub(crate) fn check_mp3(file: Box<[u8]>) -> Result<(), String> {
     Mp3Player::new(file).map(|_| ()).map_err(|_| "no pude decodificar el MP3".to_string())
 }
 
+/// Stops and resumes the audio output when the app goes to the background and comes back.
+pub fn set_output_paused(paused: bool) {
+    #[cfg(target_os = "android")]
+    aaudio::set_paused(paused);
+    #[cfg(not(target_os = "android"))]
+    let _ = paused;
+}
+
 // This function takes a volume between 0.0 and 1.0 and converts it to the logarithmic scale used by DirectMusic.
 // This is, roughly, the same function used by GM8/DirectMusic.
 // Note that the minimum possible output from this function is 0.001. I think that's accurate to GM8.

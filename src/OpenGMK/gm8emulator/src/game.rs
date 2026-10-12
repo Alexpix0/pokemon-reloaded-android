@@ -1917,6 +1917,30 @@ impl Game {
 
     /// Runs a frame loop and draws the screen. Exits immediately, without waiting for any FPS limitation.
     pub fn frame(&mut self) -> gml::Result<()> {
+        // Nothing to draw to while the activity has the window, which is exactly when the app is in
+        // the background, and in the moment between it resuming and handing the window back.
+        //
+        // The surface is the condition, not a flag of our own: Android owns the window lifecycle, so
+        // asking whether there is one cannot get out of step with it. Skipping matters because the
+        // first thing a frame does is clear the screen, and clearing a surface that has gone away
+        // answers GL_INVALID_OPERATION - which the engine treats as fatal and which killed the render
+        // thread, leaving a black screen that never recovered.
+        // Held for the whole frame, so the activity cannot destroy the surface while this frame is
+        // being drawn. Without it, detaching mid-frame makes the next OpenGL call answer
+        // GL_INVALID_OPERATION, which the engine treats as fatal and which killed the render thread.
+        #[cfg(target_os = "android")]
+        let _frame = crate::render::opengl::egl::frame_guard();
+
+        #[cfg(target_os = "android")]
+        {
+            if !crate::render::opengl::egl::has_surface() {
+                return Ok(())
+            }
+            // The window may have been replaced while we were away, so bind whatever is current now,
+            // before the frame touches anything at all.
+            unsafe { crate::render::opengl::egl::bind_surface() };
+        }
+
         // The touch overlay shows different controls depending on where we are in the game.
         #[cfg(target_os = "android")]
         crate::touch_controls::set_room(self.room.id);

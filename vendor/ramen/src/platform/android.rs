@@ -67,6 +67,18 @@ pub fn push_input(ev: InputEvent) {
     state().lock().unwrap().queue.push_back(ev);
 }
 
+/// True while the activity is in the background. The engine stops working then: there is nothing to
+/// draw to, and a game running behind a home screen only wastes battery.
+static PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_paused(paused: bool) {
+    PAUSED.store(paused, Ordering::Relaxed);
+}
+
+pub fn paused() -> bool {
+    PAUSED.load(Ordering::Relaxed)
+}
+
 pub fn push_resize(w: u16, h: u16) {
     let mut s = state().lock().unwrap();
     s.width = u32::from(w);
