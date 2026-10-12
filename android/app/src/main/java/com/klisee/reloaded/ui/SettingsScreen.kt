@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.SettingsBackupRestore
 import androidx.compose.material.icons.filled.Storage
@@ -47,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.klisee.reloaded.GameRepository
 import com.klisee.reloaded.Preferences
+import com.klisee.reloaded.Update
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,6 +60,7 @@ fun SettingsScreen(
     onLog: () -> Unit,
     onAbout: () -> Unit,
     onControls: () -> Unit,
+    onUpdateFound: (Update.Release) -> Unit,
     bottomBar: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -66,6 +69,10 @@ fun SettingsScreen(
     var status by remember(revision) { mutableStateOf(repo.status()) }
     var keepScreenOn by remember { mutableStateOf(prefs.keepScreenOn) }
     var keepAspect by remember { mutableStateOf(prefs.keepAspect) }
+    var checking by remember { mutableStateOf(false) }
+    val appVersion = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+    }
     var confirmingDelete by remember { mutableStateOf(false) }
     val installed = status as? GameRepository.Status.Ready
 
@@ -120,7 +127,8 @@ fun SettingsScreen(
     Scaffold(
         topBar = { TopAppBar(title = { Text("Ajustes") }) },
         bottomBar = bottomBar,
-        snackbarHost = { SnackbarHost(snackbar) },
+        // Lifted clear of the floating bar, which otherwise sits on top of the message.
+        snackbarHost = { SnackbarHost(snackbar, modifier = Modifier.padding(bottom = BottomNavSpace)) },
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
         Column(
@@ -225,6 +233,29 @@ fun SettingsScreen(
                     onCheckedChange = {
                         keepScreenOn = it
                         prefs.keepScreenOn = it
+                    },
+                )
+            }
+
+            SettingsGroup("Actualizaciones") {
+                NavRow(
+                    icon = Icons.Filled.SystemUpdate,
+                    title = "Version de la app: $appVersion",
+                    subtitle = "Checa si hay alguna actualizacion disponible de la aplicacion",
+                    items = 1,
+                    index = 0,
+                    enabled = !checking,
+                    onClick = {
+                        checking = true
+                        scope.launch {
+                            val found = Update.check(appVersion).getOrNull()
+                            checking = false
+                            if (found != null) {
+                                onUpdateFound(found)
+                            } else {
+                                snackbar.showSnackbar("Ya tienes la ultima version ($appVersion).")
+                            }
+                        }
                     },
                 )
             }

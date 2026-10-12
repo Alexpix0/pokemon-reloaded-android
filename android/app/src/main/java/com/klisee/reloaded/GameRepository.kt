@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipEntry
@@ -166,11 +167,16 @@ class GameRepository(private val context: Context) {
         runCatching {
             val temp = File(files, "import.zip")
             try {
+                trace("import: uri=$uri")
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     temp.outputStream().use { output -> input.copyTo(output) }
                 } ?: error("No pude abrir el fichero elegido.")
+                trace("import: copiado a $temp (${temp.length()} bytes, libre ${files.usableSpace})")
                 installZip(temp, version = null, source = "manual", onProgress = onProgress).getOrThrow()
                 prepare()
+            } catch (e: Throwable) {
+                trace("import: FALLO ${e::class.java.simpleName}: ${e.message}")
+                throw e
             } finally {
                 temp.delete()
             }
@@ -215,6 +221,7 @@ class GameRepository(private val context: Context) {
 
     /** Validates, inflates and swaps in a game zip. Mirrors the emulator's own requirements. */
     private fun installZip(zip: File, version: String?, source: String, onProgress: (Int) -> Unit): Result<Unit> = runCatching {
+        foldZipNamesToAscii(zip)
         requireGameZip(zip)
         val staging = File(files, "game.staging")
         staging.deleteRecursively()
@@ -250,11 +257,15 @@ class GameRepository(private val context: Context) {
             }
         }
 
+        // A zip of the game folder keeps it one level down, and the emulator wants it at the root.
+        unwrapSingleFolder(staging)
+        trace("import: primer nivel de ${staging.name} = ${staging.listFiles()?.joinToString { it.name } ?: "vacio"}")
+
         if (staging.listFiles()?.none { it.isFile && it.extension.equals("exe", ignoreCase = true) } != false ||
             !File(staging, "data").isDirectory
         ) {
             staging.deleteRecursively()
-            error("El zip no trae el .exe y la carpeta data/ en la raiz.")
+            error("El zip no trae el .exe y la carpeta data/.")
         }
 
         gameDir.deleteRecursively()
@@ -278,13 +289,153 @@ class GameRepository(private val context: Context) {
         ZipFile(file).use { zip ->
             var exe = false
             var data = false
+            var seen = 0
+            val first = StringBuilder()
             val entries = zip.entries()
             while (entries.hasMoreElements()) {
                 val name = entries.nextElement().name
-                if (!name.contains('/') && name.endsWith(".exe", ignoreCase = true)) exe = true
-                if (name.startsWith("data/")) data = true
+                if (seen < 12) {
+                    first.append(name).append(" | ")
+                    seen++
+                }
+                if (name.endsWith(".exe", ignoreCase = true)) exe = true
+                if (name.startsWith("data/") || name.contains("/data/")) data = true
             }
-            if (!exe || !data) error("Ese zip no parece Pokemon Reloaded: falta el .exe o la carpeta data/ en la raiz.")
+            trace("import: exe=$exe data=$data; empieza por: $first")
+            // Only a sanity check. The layout is settled once the zip is unpacked, because a zip
+            // made by right-clicking the game folder keeps everything one level down.
+            if (!exe || !data) error("Ese zip no parece Pokemon Reloaded: no encuentro el .exe ni la carpeta data/.")
         }
+    }
+
+    /** Writes one line to logcat (visible from Ajustes -> Logs), so failures can be diagnosed. */
+    private fun trace(message: String) {
+        android.util.Log.i("Reloaded", message)
+    }
+
+    /**
+     * Folds the entry names that are not valid UTF-8 down to plain ASCII, in place and without
+     * changing a single length.
+     *
+     * The official game zip was made with a DOS code page, so two of its names carry an accent as a
+     * single byte - `0xA1` for the "i" of "Especificas", `0xA2` for the "o" of "Informacion". The
+     * zip does not set the UTF-8 flag, and Android's zip reader refuses the *whole* archive when it
+     * meets a name that is not valid UTF-8, which is why importing the game failed for everybody.
+     * Rewriting one byte for one byte leaves every offset and length in the file untouched, so the
+     * archive stays perfectly valid.
+     */
+    private fun foldZipNamesToAscii(file: File) {
+        runCatching {
+            RandomAccessFile(file, "rw").use { raf ->
+                val eocd = findEndOfCentralDirectory(raf) ?: return
+                raf.seek(eocd + 10)
+                val count = readLe16(raf)
+                val cdSize = readLe32(raf)
+                val cdOffset = readLe32(raf)
+                if (cdSize <= 0L || cdSize > 64L * 1024 * 1024) return
+
+                val cd = ByteArray(cdSize.toInt())
+                raf.seek(cdOffset)
+                raf.readFully(cd)
+
+                var p = 0
+                repeat(count) {
+                    if (p + 46 > cd.size) return
+                    if (cd[p] != 'P'.code.toByte() || cd[p + 1] != 'K'.code.toByte() ||
+                        cd[p + 2] != 1.toByte() || cd[p + 3] != 2.toByte()
+                    ) {
+                        return
+                    }
+                    val nameLen = le16(cd, p + 28)
+                    val extraLen = le16(cd, p + 30)
+                    val commentLen = le16(cd, p + 32)
+                    val localOffset = le32(cd, p + 42)
+
+                    var changed = false
+                    for (i in 0 until nameLen) {
+                        val at = p + 46 + i
+                        val byte = cd[at].toInt() and 0xff
+                        if (byte > 0x7f) {
+                            cd[at] = foldToAscii(byte)
+                            changed = true
+                        }
+                    }
+
+                    if (changed) {
+                        trace("import: nombre arreglado: ${asciiName(cd, p + 46, nameLen)}")
+                        raf.seek(cdOffset + p + 46)
+                        raf.write(cd, p + 46, nameLen)
+
+                        // The local header repeats the name, and readers may use either copy.
+                        raf.seek(localOffset + 26)
+                        val localNameLen = readLe16(raf)
+                        raf.seek(localOffset + 30)
+                        raf.write(cd, p + 46, minOf(nameLen, localNameLen))
+                    }
+                    p += 46 + nameLen + extraLen + commentLen
+                }
+            }
+        }
+    }
+
+    private fun asciiName(bytes: ByteArray, at: Int, length: Int) =
+        String(bytes, at, length, Charsets.ISO_8859_1)
+
+    private fun findEndOfCentralDirectory(raf: RandomAccessFile): Long? {
+        val window = minOf(raf.length(), 64L * 1024).toInt()
+        if (window < 4) return null
+        val tail = ByteArray(window)
+        raf.seek(raf.length() - window)
+        raf.readFully(tail)
+        for (i in window - 4 downTo 0) {
+            if (tail[i] == 'P'.code.toByte() && tail[i + 1] == 'K'.code.toByte() &&
+                tail[i + 2] == 5.toByte() && tail[i + 3] == 6.toByte()
+            ) {
+                return raf.length() - window + i
+            }
+        }
+        return null
+    }
+
+    private fun le16(bytes: ByteArray, at: Int) =
+        (bytes[at].toInt() and 0xff) or ((bytes[at + 1].toInt() and 0xff) shl 8)
+
+    private fun le32(bytes: ByteArray, at: Int) = le16(bytes, at).toLong() or ((le16(bytes, at + 2)).toLong() shl 16)
+
+    private fun readLe16(raf: RandomAccessFile) = le16(ByteArray(2).also { raf.readFully(it) }, 0)
+
+    private fun readLe32(raf: RandomAccessFile) = le32(ByteArray(4).also { raf.readFully(it) }, 0)
+
+    /** The DOS code page byte for a Spanish accent, folded to the plain letter it stands for. */
+    private fun foldToAscii(byte: Int): Byte = when (byte) {
+        0x82, 0x90 -> 'e'.code.toByte()
+        0xA0, 0xB5 -> 'a'.code.toByte()
+        0xA1, 0xD6 -> 'i'.code.toByte()
+        0xA2, 0xE0 -> 'o'.code.toByte()
+        0xA3, 0xE9 -> 'u'.code.toByte()
+        0xA4, 0xA5 -> 'n'.code.toByte()
+        0x81, 0x9A -> 'u'.code.toByte()
+        else -> '_'.code.toByte()
+    }
+
+    /**
+     * Moves the contents of a lone top-level folder up to `staging`.
+     *
+     * A zip made by compressing the game folder keeps the game one level down, and the emulator
+     * wants it at the root: refusing those is what made importing fail for most people. It only
+     * acts when that folder really looks like the game, and does nothing when the top level holds
+     * several things, because then there is no telling which one is the game.
+     */
+    private fun unwrapSingleFolder(staging: File) {
+        val top = staging.listFiles()?.filter { it.name != "__MACOSX" && !it.name.startsWith(".") } ?: return
+        val only = top.singleOrNull()?.takeIf { it.isDirectory } ?: return
+        val inner = only.listFiles()?.toList().orEmpty()
+        val hasExe = inner.any { it.isFile && it.extension.equals("exe", ignoreCase = true) }
+        val hasData = inner.any { it.isDirectory && it.name == "data" }
+        if (!hasExe || !hasData) return
+        for (child in inner) {
+            if (!child.renameTo(File(staging, child.name))) return
+        }
+        only.delete()
     }
 }

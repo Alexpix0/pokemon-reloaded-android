@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The downloaded update lives in the cache, and the system installer is handed a content:// URI to
+  it, which is the only way an app is allowed to install a package from its own storage.
+-->
+<paths>
+    <cache-path name="update" path="update.apk" />
+</paths>

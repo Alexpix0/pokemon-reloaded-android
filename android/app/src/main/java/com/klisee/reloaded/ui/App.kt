@@ -38,6 +38,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.klisee.reloaded.Emulator
 import com.klisee.reloaded.GameRepository
 import com.klisee.reloaded.Preferences
+import com.klisee.reloaded.Update
+import com.klisee.reloaded.installUpdate
 import kotlinx.coroutines.launch
 
 /** Screens reached from a tab rather than being tabs themselves. */
@@ -92,6 +94,47 @@ fun App(repo: GameRepository, prefs: Preferences) {
         repo.prepare()
     }
 
+    // A newer build, offered once per run. Nothing is downloaded until the player says so.
+    var update by remember { mutableStateOf<Update.Release?>(null) }
+    var updating by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val installed = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+        if (installed.isNotEmpty()) {
+            Update.check(installed).getOrNull()?.let { update = it }
+        }
+    }
+
+    update?.let { release ->
+        UpdateDialog(
+            release = release,
+            busy = updating,
+            onDownload = {
+                val url = release.apkUrl
+                if (url == null) {
+                    // No APK attached to the release: the page is the honest fallback.
+                    openInBrowser(context, release.pageUrl)
+                    update = null
+                } else {
+                    updating = true
+                    scope.launch {
+                        val file = Update.download(url, java.io.File(context.cacheDir, "update.apk")).getOrNull()
+                        updating = false
+                        update = null
+                        if (file != null) installUpdate(context, file) else openInBrowser(context, release.pageUrl)
+                    }
+                }
+            },
+            onDismiss = { update = null },
+            onOpenReleases = {
+                openInBrowser(context, Update.RELEASES_PAGE)
+                update = null
+            },
+        )
+    }
+
     if (!onboarded) {
         Onboarding(
             repo = repo,
@@ -130,6 +173,7 @@ fun App(repo: GameRepository, prefs: Preferences) {
                         onLog = { scope.launch { pagerState.animateScrollToPage(Tab.Log.ordinal) } },
                         onAbout = { pushed = Pushed.About },
                         onControls = { pushed = Pushed.Controls },
+                        onUpdateFound = { update = it },
                     )
                 }
             }

@@ -129,7 +129,8 @@ fun HomeScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbar) },
+        // Lifted clear of the floating bar, which otherwise sits on top of the message.
+        snackbarHost = { SnackbarHost(snackbar, modifier = Modifier.padding(bottom = BottomNavSpace)) },
         bottomBar = bottomBar,
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
