@@ -829,17 +829,8 @@ impl Game {
                     use gm8exe::asset::sound::SoundKind;
                     let handle = match b.data {
                         Some(data) => match String::from_utf8_lossy(&b.extension.0).to_lowercase().as_str() {
-                            ".mid" => match audio::midi::render_to_wav(&data) {
-                                Some(wav) => match audio.add_wav(
-                                    wav.into_boxed_slice(),
-                                    sound_id as i32,
-                                    b.volume,
-                                    false,
-                                    true,
-                                ) {
-                                    Some(x) => FileType::Wav(x),
-                                    None => FileType::None,
-                                },
+                            ".mid" => match audio.add_midi(data, sound_id as i32, b.volume, true) {
+                                Some(x) => FileType::Midi(x),
                                 None => FileType::None,
                             },
                             ".mp3" => match audio.add_mp3(data, sound_id as i32) {

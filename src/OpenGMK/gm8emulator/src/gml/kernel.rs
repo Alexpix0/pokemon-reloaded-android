@@ -2,7 +2,6 @@
 
 #![allow(unused_macros)]
 
-use crate::game::audio::midi;
 use gm8exe::asset::Asset;
 
 use crate::{
@@ -9323,18 +9322,8 @@ impl Game {
         let sound_id = self.assets.sounds.len() as i32;
         let extension = path_buf.extension().and_then(std::ffi::OsStr::to_str).map(|e| e.to_ascii_lowercase());
         let handle = match extension.as_deref() {
-            Some("mid") => match midi::render_to_wav(&data) {
-                Some(wav) => match self.audio.add_wav(wav.into_boxed_slice(), sound_id as i32, 1.0, false, true) {
-                    Some(x) => asset::sound::FileType::Wav(x),
-                    None => return Ok((-1).into()),
-                },
-                None => return Ok((-1).into()),
-            },
-            Some("midi") => match midi::render_to_wav(&data) {
-                Some(wav) => match self.audio.add_wav(wav.into_boxed_slice(), sound_id as i32, 1.0, false, true) {
-                    Some(x) => asset::sound::FileType::Wav(x),
-                    None => return Ok((-1).into()),
-                },
+            Some("mid") | Some("midi") => match self.audio.add_midi(data, sound_id as i32, 1.0, true) {
+                Some(x) => asset::sound::FileType::Midi(x),
                 None => return Ok((-1).into()),
             },
             Some("mp3") => match self.audio.add_mp3(data, sound_id as i32) {
@@ -9380,11 +9369,8 @@ impl Game {
                 Err(_) => return Ok(0.into()),
             };
             sound.handle = match path_buf.extension().and_then(std::ffi::OsStr::to_str).map(|e| e.to_ascii_lowercase()).as_deref() {
-                Some("mid") | Some("midi") => match midi::render_to_wav(&data) {
-                    Some(wav) => match self.audio.add_wav(wav.into_boxed_slice(), sound_id, 1.0, false, true) {
-                        Some(x) => asset::sound::FileType::Wav(x),
-                        None => return Ok(0.into()),
-                    },
+                Some("mid") | Some("midi") => match self.audio.add_midi(data, sound_id, 1.0, true) {
+                    Some(x) => asset::sound::FileType::Midi(x),
                     None => return Ok(0.into()),
                 },
                 Some("mp3") => match self.audio.add_mp3(data, sound_id as i32) {
@@ -12664,6 +12650,7 @@ impl Game {
             use asset::sound::FileType;
             let nanos = self.clock.as_nanos();
             match &sound.handle {
+                FileType::Midi(handle) => self.audio.play_midi(handle, nanos),
                 FileType::Mp3(handle) => self.audio.play_mp3(handle, nanos),
                 FileType::Wav(handle) => self.audio.play_wav(handle, nanos),
                 FileType::None => (),
@@ -12683,12 +12670,14 @@ impl Game {
             eprintln!(
                 "[snd] loop tipo = {}",
                 match &sound.handle {
+                    FileType::Midi(_) => "Midi",
                     FileType::Mp3(_) => "Mp3",
                     FileType::Wav(_) => "Wav",
                     FileType::None => "None",
                 }
             );
             match &sound.handle {
+                FileType::Midi(handle) => self.audio.loop_midi(handle),
                 FileType::Mp3(handle) => self.audio.loop_mp3(handle),
                 FileType::Wav(handle) => self.audio.loop_wav(handle),
                 FileType::None => (),
@@ -12722,6 +12711,7 @@ impl Game {
             // Deliberately written in a way that will produce an error when Kind::Midi is added
             use asset::sound::FileType;
             match &sound.handle {
+                FileType::Midi(handle) => handle.set_volume(volume.into()),
                 FileType::Wav(handle) => handle.set_volume(volume.into()),
                 FileType::Mp3(_) => (),
                 FileType::None => (),
@@ -12741,6 +12731,7 @@ impl Game {
         if let Some(sound) = self.assets.sounds.get_asset(sound_id) {
             use asset::sound::FileType;
             match &sound.handle {
+                FileType::Midi(handle) => handle.set_volume(volume.into()),
                 FileType::Wav(handle) => handle.set_volume(volume.into()),
                 FileType::Mp3(_) | FileType::None => (),
             }

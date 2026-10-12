@@ -24,6 +24,7 @@ use udon::{
     wav::WavPlayer,
 };
 
+pub use self::midi::MidiHandle;
 use self::{
     mixer::{Mixer, MixerHandle},
     mp3::Mp3Player,
@@ -296,6 +297,12 @@ impl AudioManager {
             .ok()
     }
 
+    /// Loads a MIDI file. Nothing is synthesized here: the song is rendered block by block while
+    /// it plays, so changing the music costs a parse rather than a full render.
+    pub fn add_midi(&mut self, data: Box<[u8]>, sound_id: i32, volume: f64, exclusive: bool) -> Option<MidiHandle> {
+        MidiHandle::new(data, sound_id, volume, exclusive)
+    }
+
     pub fn play_mp3(&mut self, handle: &Mp3Handle, start_time: u128) {
         let end_time = length_to_ns(
             handle.player.length(),
@@ -344,6 +351,71 @@ impl AudioManager {
                     handle.params.clone(),
                     handle.id,
                 );
+            }
+        }
+    }
+
+    pub fn play_midi(&mut self, handle: &MidiHandle, start_time: u128) {
+        let end_time = length_to_ns(handle.length(), handle.sample_rate(), handle.channel_count()) + start_time;
+        if handle.exclusive {
+            self.multimedia_end = Some((handle.id, Some(end_time)));
+        } else if self.end_times.get(&handle.id) != Some(&None) {
+            self.end_times.insert(handle.id, Some(end_time));
+        }
+
+        if self.do_output {
+            if let Some(source) = handle.source(false) {
+                if handle.exclusive {
+                    let _ = self.mixer_handle.add_exclusive(
+                        Rechanneler::new(
+                            Resampler::new(source, self.mixer_sample_rate),
+                            self.mixer_channel_count,
+                        ),
+                        handle.id,
+                    );
+                } else {
+                    let _ = self.mixer_handle.add(
+                        Rechanneler::new(
+                            Resampler::new(source, self.mixer_sample_rate),
+                            self.mixer_channel_count,
+                        ),
+                        handle.params.clone(),
+                        handle.id,
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn loop_midi(&mut self, handle: &MidiHandle) {
+        if handle.exclusive {
+            self.multimedia_end = Some((handle.id, None));
+        } else {
+            self.end_times.insert(handle.id, None);
+        }
+
+        if self.do_output {
+            // The sequencer loops the file itself, so this source never ends and there is no need
+            // to cycle it at the mixer.
+            if let Some(source) = handle.source(true) {
+                if handle.exclusive {
+                    let _ = self.mixer_handle.add_exclusive(
+                        Rechanneler::new(
+                            Resampler::new(source, self.mixer_sample_rate),
+                            self.mixer_channel_count,
+                        ),
+                        handle.id,
+                    );
+                } else {
+                    let _ = self.mixer_handle.add(
+                        Rechanneler::new(
+                            Resampler::new(source, self.mixer_sample_rate),
+                            self.mixer_channel_count,
+                        ),
+                        handle.params.clone(),
+                        handle.id,
+                    );
+                }
             }
         }
     }
@@ -489,6 +561,6 @@ pub(crate) fn check_mp3(file: Box<[u8]>) -> Result<(), String> {
 // This function takes a volume between 0.0 and 1.0 and converts it to the logarithmic scale used by DirectMusic.
 // This is, roughly, the same function used by GM8/DirectMusic.
 // Note that the minimum possible output from this function is 0.001. I think that's accurate to GM8.
-fn make_volume(vol: f64) -> f32 {
+pub(crate) fn make_volume(vol: f64) -> f32 {
     1000.0f64.powf(vol.clamp(0.0, 1.0) - 1.0) as f32
 }
