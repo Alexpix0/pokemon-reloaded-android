@@ -97,7 +97,8 @@ fun App(repo: GameRepository, prefs: Preferences) {
     // A newer build, offered once per run. Nothing is downloaded until the player says so.
     var update by remember { mutableStateOf<Update.Release?>(null) }
     var updating by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0) }
+    var written by remember { mutableStateOf(0L) }
+    var total by remember { mutableStateOf(0L) }
     var problem by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
@@ -113,7 +114,8 @@ fun App(repo: GameRepository, prefs: Preferences) {
         UpdateDialog(
             release = release,
             busy = updating,
-            progress = progress,
+            written = written,
+            total = total,
             problem = problem,
             onDownload = {
                 val url = release.apkUrl
@@ -123,10 +125,14 @@ fun App(repo: GameRepository, prefs: Preferences) {
                     update = null
                 } else {
                     updating = true
-                    progress = 0
+                    written = 0
+                    total = 0
                     problem = null
                     scope.launch {
-                        val result = Update.download(url, java.io.File(context.cacheDir, "update.apk")) { progress = it }
+                        val result = Update.download(url, java.io.File(context.cacheDir, "update.apk")) { done, size ->
+                            written = done
+                            total = size
+                        }
                         updating = false
                         val file = result.getOrNull()
                         if (file == null) {

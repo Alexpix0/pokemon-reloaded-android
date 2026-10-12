@@ -44,7 +44,7 @@ object Update {
      * apart from a download that has died. Everything that happens is also written to the log, since
      * the failure used to be swallowed and the app simply opened the browser as if nothing was wrong.
      */
-    suspend fun download(url: String, target: File, onProgress: (Int) -> Unit): Result<File> = withContext(Dispatchers.IO) {
+    suspend fun download(url: String, target: File, onProgress: (Long, Long) -> Unit): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val connection = open(url)
             connection.connect()
@@ -61,7 +61,7 @@ object Update {
                         if (read < 0) break
                         output.write(buffer, 0, read)
                         written += read
-                        if (total > 0) onProgress((written * 100 / total).toInt())
+                        onProgress(written, total)
                     }
                     trace("update: descargados $written bytes")
                 }
@@ -112,8 +112,17 @@ object Update {
  * been granted there is nothing to open - so that case is reported instead of failing quietly.
  */
 fun installUpdate(context: android.content.Context, apk: File): String? {
+    // Without this Android will not open an installer for a file from this app, and it fails with
+    // nothing to see. Sending the user straight to the switch is the only way to get anywhere.
     if (!context.packageManager.canRequestPackageInstalls()) {
-        return "Android no deja instalar desde esta app todavia. Activalo en los ajustes y vuelve a intentarlo."
+        return runCatching {
+            context.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                    .setData(android.net.Uri.parse("package:${context.packageName}"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            "Activa \"Permitir desde esta fuente\" y vuelve a darle a Descargar."
+        }.getOrElse { "Android no deja instalar desde esta app: ${it.message}" }
     }
     return runCatching {
         val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)

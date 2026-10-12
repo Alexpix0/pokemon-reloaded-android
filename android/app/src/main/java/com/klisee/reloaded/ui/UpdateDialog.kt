@@ -1,6 +1,8 @@
 package com.klisee.reloaded.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -26,28 +28,47 @@ import com.klisee.reloaded.Update
 fun UpdateDialog(
     release: Update.Release,
     busy: Boolean,
-    progress: Int,
+    written: Long,
+    total: Long,
     problem: String?,
     onDownload: () -> Unit,
     onDismiss: () -> Unit,
     onOpenReleases: () -> Unit,
 ) {
+    val percent = if (total > 0) (written * 100 / total).toInt() else 0
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.SystemUpdate, contentDescription = null) },
-        title = { Text("Hay una version nueva") },
+        title = { Text(if (busy) "Descargando actualizacion" else "Hay una version nueva") },
         text = {
             Column {
-                Text("La version ${release.version} esta disponible. La que tienes es mas antigua.")
+                Text("Version ${release.version}")
                 if (busy) {
-                    Text(
-                        text = "Descargando... $progress%",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
                     LinearWavyProgressIndicator(
-                        progress = { progress / 100f },
+                        progress = { if (total > 0) written.toFloat() / total.toFloat() else 0f },
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    )
+                    Row(
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "${inMegabytes(written)} de ${if (total > 0) inMegabytes(total) else "?"} MB",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "$percent%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (problem == null && !busy) {
+                    Text(
+                        text = "Se descarga y se instala sola, sin pasar por el navegador. Android te pedira permiso la primera vez.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (problem != null) {
@@ -72,7 +93,11 @@ fun UpdateDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancelar") }
+            // "Ocultar" while it works, "Cancelar" while it waits: the same thing to the user, but
+            // it says what it does at each moment.
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(if (busy) "Ocultar" else "Cancelar") }
         },
     )
 }
+
+private fun inMegabytes(bytes: Long) = "%.1f".format(bytes / 1024.0 / 1024.0)
