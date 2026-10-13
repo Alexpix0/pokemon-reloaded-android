@@ -114,6 +114,7 @@ impl From<PrimitiveType> for PrimitiveShape {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[repr(C)]
 struct Vertex {
     pub pos: [f32; 3],
     pub tex_coord: [f32; 2],

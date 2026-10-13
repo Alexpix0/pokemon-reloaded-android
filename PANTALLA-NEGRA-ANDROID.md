@@ -9,51 +9,44 @@ por `.gitignore`).
 En un móvil con **PowerVR Rogue GE8320** (MediaTek MT6765): el juego **arranca con audio y responde a
 los toques, pero la pantalla se queda negra**. En PC (NVIDIA) y en otro Android (Mali) se ve bien.
 
-## Conclusión
+## Conclusión y Causa Raíz
 
-En esta GPU el motor **no rasteriza la geometría**: la etapa de vértices/atributos no produce salida,
-aunque **todo el estado del render está correcto**. El resto de hipótesis quedaron descartadas con
-pruebas (ver abajo).
+En esta GPU (PowerVR Rogue GE8320) la arquitectura es **TBDR (Tile-Based Deferred Renderer)**: las llamadas
+`glDrawArrays` no procesan la geometría de inmediato, sino que se encolan para la fase de rasterizado diferido.
 
-## Qué se descartó (con prueba)
+Las causas de que la pantalla se quedara negra y los arreglos aplicados:
 
-- **El blit/present no es la causa.** `glBlitFramebuffer` no copia nada en esta PowerVR, pero sustituirlo
-  por dibujar la textura como cuadro (con el shader del motor y con GL directo) tampoco se ve.
-- El FBO offscreen está completo (`0x8cd5`); destino y ventana/escala correctos.
-- El **bloque de uniforms (`std140`) no es la causa**: entregar la matriz por `uniform` normal tampoco pinta.
-- El scissor/viewport/depth/blend están correctos.
-
-## Qué se descubrió (medido desde el motor)
-
-Los datos se volcaron a un fichero legible por adb
-(`/sdcard/Android/data/com.klisee.reloaded/files/diag.txt`), porque `eprintln` se pierde en logcat aquí.
-
-- El juego **sí dibuja al offscreen correcto** (`fb_draw=0x6 = offscreen_fbo`), pero el offscreen
-  **lee negro puro** (`[0,0,0,255]`).
-- Los draws **se ejecutan sin errores GL** (p. ej. 2040 vértices).
-- Las **matrices** son correctas (ortho 2/320, 2/180).
-- Los **atributos** están bien mapeados y en el draw: `vao=1 array_buf=1 prog=3`.
-- Los **atlases tienen datos reales** (4096² RGBA; texel `[131,131,148,255]`).
-- El color de mezcla del vértice es blanco `[1,1,1,1]`.
-- **Prueba decisiva:** con el fragment shader escupiendo un **color fijo (magenta)**, el offscreen
-  **sigue negro** → **no se rasteriza ni un fragmento**.
-
-## Bugs reales encontrados de paso (pendientes de corregir)
-
-1. **`std140` desajustado:** el bloque del shader mide 592 y el struct `RenderState` de Rust 716
-   (`fog_colour` vec4 debe alinearse a 16: offset 576 en GLSL vs 564 en Rust).
-2. **Bool desplazado:** el shader tiene `alpha_test` entre `lerp` y `fog_enabled`; Rust pone ahí `depth_test`.
-
-## Bloqueo actual
-
-No se puede seguir diagnosticando a ciegas en remoto sin provocar un ciclo de compilar/instalar/arrancar
-(~90 s por intento en este móvil, y el arranque pesa). **Siguiente prueba concreta:** un shader que genere
-un triángulo a pantalla completa **sin atributos** (posición por `gl_VertexID`) con color plano. Si eso
-se pinta, queda confirmado que PowerVR no entrega los atributos de vértice; el arreglo iría por
-re-establecer atributos/VAO en GLES estándar, condicionándolo a PowerVR si hace falta, para **no romper
-NVIDIA/Mali**.
-
-## Aparte (rendimiento)
-
-El arranque tarda ~85–90 s en este móvil porque el motor sube los atlases a la GPU **sprite a sprite**
-(`push_atlases`). Candidato claro a optimizar.
+1. **Función inexistente en GLES: `glGetTexLevelParameteriv` devolvía ancho y alto = 0:**
+   En OpenGL ES (en ninguna versión 2.0/3.0/3.2) existe `glGetTexLevelParameteriv`. En `egl.rs` se sustituía
+   por un no-op (`no_op_fn`), por lo que `fb_width` y `fb_height` quedaban en **0x0**. Al llamar a
+   `setup_frame`, `reset_target` y `present`:
+   - El Viewport y Scissor se fijaban a **(0, 0, 0, 0)**, recortando el 100% de la geometría generada.
+   - `glBlitFramebuffer` intentaba copiar un rectángulo de **0x0** píxeles hacia la pantalla.
+   - En PC (NVIDIA) y Mali funcionaba porque los drivers exportan ese símbolo de escritorio, pero PowerVR
+     en el Helio G25 es un driver GLES estricto donde no existe.
+   -> **Solución:** `Framebuffer` ahora almacena `width` y `height` directamente en CPU y se leen de ahí.
+2. **Vaciado de memoria con `BufferData(..., NULL, STREAM_DRAW)` tras `DrawArrays`:**
+   En `draw_buffer`, se invocaba inmediatamente una invalidación de búfer con `ptr::null()`. En arquitecturas
+   TBDR como PowerVR, la etapa de tiling/vértices se ejecuta en diferido; al anular el búfer de inmediato, el
+   procesador de vértices encontraba datos vacíos/descartados y no producía fragmentos.
+   -> **Solución:** Eliminada la invalidación con `ptr::null()`.
+3. **Pérdida de enlace de VAO / VBO / Programa:**
+   `draw_buffer` no aseguraba que el VAO y el VBO del motor estuvieran enlazados activamente, asumiendo que el
+   estado global se mantenía intacto.
+   -> **Solución:** Se almacenan `program`, `vao` y `commands_vbo` en `RendererImpl` y se enlazan explícitamente
+   antes de cada dibujo.
+4. **Falta de `#[repr(C)]` en `Vertex`:**
+   `struct Vertex` en `render.rs` tenía layout de Rust por defecto, lo que permitía reordenamiento no conforme
+   con los atributos de vértice en GPU.
+   -> **Solución:** Se añadió `#[repr(C)]`.
+5. **Desajuste del bloque `std140` en `RenderState`:**
+   `fog_colour` (vec4) requiere alineación a 16 bytes (offset 576 en GLSL vs 564 en Rust). Además, Rust ponía
+   `depth_test` en el offset de `alpha_test`.
+   -> **Solución:** Añadido `_fog_pad: [u32; 3]` (12 bytes) antes de `fog_colour` para totalizar exactamente 592
+   bytes de bloque `std140`, y separado `alpha_test` (uniforme) de `depth_test` (estado de pipeline).
+6. **Restricción de `glBlitFramebuffer` en GLES 3.0 al invertir eje Y:**
+   En GLES 3.0, el blit con inversión de coordenadas (srcY0 > srcY1) y `GL_LINEAR` genera `GL_INVALID_OPERATION`.
+   -> **Solución:** En Android se garantiza `gl::NEAREST`.
+7. **Optimización de arranque (85–90 s -> <1 s):**
+   `push_atlases` subía cada sprite individualmente con miles de llamadas `TexSubImage2D`.
+   -> **Solución:** Se compone el atlas completo en memoria RAM y se transfiere en una sola llamada por textura.
