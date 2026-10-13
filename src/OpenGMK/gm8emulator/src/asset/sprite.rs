@@ -61,9 +61,13 @@ pub fn process_image(image: &mut RgbaImage, removeback: bool, smooth: bool, fill
     }
     if removeback {
         // remove background colour
-        let bottom_left = image.get_pixel(0, image.height() - 1).to_rgb();
+        // Compare the whole pixel (including alpha), not just RGB: the game's `.gif` Pokémon have a
+        // *transparent black* background while their outline is *opaque black*, so matching on RGB
+        // alone wiped the black border. A plain colour-keyed sprite (opaque background) still works,
+        // since there the whole background shares the corner's alpha too.
+        let bottom_left = *image.get_pixel(0, image.height() - 1);
         for px in image.pixels_mut() {
-            if px.to_rgb() == bottom_left {
+            if *px == bottom_left {
                 px[3] = 0;
             }
         }
