@@ -874,11 +874,11 @@ impl Game {
         {
             Ok(value)
         } else {
-            if self.uninit_fields_are_zero {
-                Ok(Value::Real(Real::from(0.0)))
-            } else {
-                Err(Error::UninitializedVariable(self.compiler.get_field_name(field_id).unwrap(), array_index))
-            }
+            // GM8 devuelve 0 al leer una variable de instancia que nunca se ha asignado, aunque el
+            // ajuste "Treat uninitialized variables as value 0" del juego este desactivado (en GM8 el
+            // juego original no falla). Devolver aqui el error terminaba el juego: p. ej. lanzaba
+            // "uninitialized variable ACTUAL" y cerraba la partida en los combates dobles.
+            Ok(Value::Real(Real::from(0.0)))
         }
     }
 
