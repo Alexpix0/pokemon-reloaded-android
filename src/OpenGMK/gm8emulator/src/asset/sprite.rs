@@ -320,10 +320,18 @@ impl Collider {
         util::rotate_around_center(x.as_mut_ref(), y.as_mut_ref(), angle_sin, angle_cos);
         let x = (Real::from(origin_x) + (x / xscale)).floor().to_i32();
         let y = (Real::from(origin_y) + (y / yscale)).floor().to_i32();
-        x >= self.bbox_left as i32
+        let within_bbox = x >= self.bbox_left as i32
             && y >= self.bbox_top as i32
             && x <= self.bbox_right as i32
-            && y <= self.bbox_bottom as i32
-            && self.data.get((y as usize * self.width as usize) + x as usize).copied().unwrap_or(false)
+            && y <= self.bbox_bottom as i32;
+        // A collision map with no pixels at all means the sprite has no precise mask (GM8 then does
+        // a plain bounding-box collision). This is the case for the game's own `.gmspr` battle
+        // sprites, which store a bbox but no pixel mask: treating them as "never collides" is what
+        // made the "Vuelo" effect never land on the Pokémon.
+        if self.data.is_empty() {
+            within_bbox
+        } else {
+            within_bbox && self.data.get((y as usize * self.width as usize) + x as usize).copied().unwrap_or(false)
+        }
     }
 }
