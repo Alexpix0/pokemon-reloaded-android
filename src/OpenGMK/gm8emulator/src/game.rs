@@ -1689,7 +1689,11 @@ impl Game {
         // Update some stored vars
         let mut room_state = room_state;
         std::mem::swap(&mut self.room, &mut room_state);
-        if self.room.persistent && !self.game_start {
+        // Tras el swap, `room_state` es la sala que se abandona y `self.room` la nueva. Una sala se
+        // guarda (para restaurarla al volver) si ES ELLA la persistente, no la que se entra: la
+        // mochila marca persistente la sala del combate y se va a la del menu, y al mirar el flag
+        // de la sala nueva no se guardaba el combate, reiniciandolo al volver.
+        if room_state.persistent && !self.game_start {
             self.stored_rooms.push(room_state);
         }
         // clearing input here breaks direct keyboard checks, so just step instead
