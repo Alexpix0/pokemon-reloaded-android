@@ -450,7 +450,7 @@ impl Game {
 
     pub fn window_set_region_scale(&mut self, args: &[Value]) -> gml::Result<Value> {
         let (scaling, shrink_window) = expect_args!(args, [real, bool])?;
-        let scaling = match scaling {
+        let requested = match scaling {
             n if n == 0.into() => Scaling::Full,
             n if n < 0.into() => Scaling::Aspect(n.into_inner()),
             n => Scaling::Fixed(n.into_inner()),
@@ -458,9 +458,19 @@ impl Game {
         // Every request is reported. This game changes the scaling of its own accord around battles
         // and their animations, and a picture that ends up out of step with the camera cannot be
         // explained without knowing what was asked for, and in which order.
-        eprintln!("[video] el juego pide escalado {:?} (region {}x{})", scaling, self.unscaled_width, self.unscaled_height);
-        self.scaling = scaling;
-        if let Scaling::Fixed(n) = scaling {
+        eprintln!("[video] el juego pide escalado {:?} (region {}x{})", requested, self.unscaled_width, self.unscaled_height);
+        // The launcher's video choice wins over whatever the game asks for at runtime: the game
+        // asks for "fill" while loading a save and around battles, which used to undo the player's
+        // choice, so "keep aspect ratio" came and went instead of staying put.
+        if let Some(pinned) = crate::render::pinned_scaling() {
+            if self.scaling != pinned {
+                eprintln!("[video] se mantiene la preferencia del launcher {:?}", pinned);
+            }
+            self.scaling = pinned;
+            return Ok(Default::default());
+        }
+        self.scaling = requested;
+        if let Scaling::Fixed(n) = requested {
             let (region_w, region_h) =
                 ((self.unscaled_width as f64 * n) as u32, (self.unscaled_height as f64 * n) as u32);
             let (width, height) = if shrink_window {

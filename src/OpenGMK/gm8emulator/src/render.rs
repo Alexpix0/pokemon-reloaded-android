@@ -9,7 +9,7 @@ use ramen::{connection::Connection, window::Window};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Scaling {
     /// Fixed scale, with a multiplier. The multiplier must always be strictly positive.
     Fixed(f64),

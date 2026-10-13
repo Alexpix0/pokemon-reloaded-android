@@ -286,7 +286,9 @@ impl SaveState {
         game.gm_version = self.gm_version;
         game.clock = self.clock;
         game.audio.set_state(self.audio_state);
-        game.scaling = self.scaling;
+        // Restore the saved scaling, unless the launcher pinned one: otherwise loading a state saved
+        // while the game had stretched the picture would undo the player's "keep aspect ratio".
+        game.scaling = crate::render::pinned_scaling().unwrap_or(self.scaling);
         game.unscaled_width = self.unscaled_width;
         game.unscaled_height = self.unscaled_height;
         (self.replay, self.renderer_state)
