@@ -2,6 +2,7 @@ package com.klisee.reloaded
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -291,9 +292,7 @@ class GameRepository(private val context: Context) {
             val temp = File(files, "import.zip")
             try {
                 trace("import: uri=$uri")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    temp.outputStream().use { output -> input.copyTo(output) }
-                } ?: error("No pude abrir el fichero elegido.")
+                copyFromUri(uri, temp, onProgress)
                 trace("import: copiado a $temp (${temp.length()} bytes, libre ${files.usableSpace})")
                 installZip(temp, version = null, source = "manual", onProgress = onProgress).getOrThrow()
                 prepare()
@@ -305,6 +304,54 @@ class GameRepository(private val context: Context) {
             }
         }
     }
+
+    /**
+     * Copies the chosen zip into `dest`, tolerating the flaky streams some pickers hand out.
+     *
+     * Reading a big document through `contentResolver.openInputStream()` is not reliable on every
+     * device: the stream can end early (`unexpected EOF`) or come back empty, especially on devices
+     * with little memory and the game on slow/adopted storage. That is what made importing the zip
+     * fail. So the size the picker reports is used as a reference, the file is verified after the
+     * copy, and the whole thing is retried a few times before giving up. Leaving a half-written
+     * `import.zip` behind (as before) made the next step read a broken archive.
+     */
+    private fun copyFromUri(uri: Uri, dest: File, onProgress: (Int) -> Unit) {
+        val expected = contentResolverSize(uri)
+        var last: Throwable? = null
+        for (attempt in 1..3) {
+            try {
+                dest.delete()
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    dest.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(256 * 1024)
+                        var copied = 0L
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            output.write(buffer, 0, n)
+                            copied += n
+                            if (expected > 0) onProgress(((copied * 100) / expected).toInt().coerceIn(0, 99))
+                        }
+                    }
+                } ?: error("No pude abrir el fichero elegido.")
+                val size = dest.length()
+                if (size == 0L) error("La copia vino vacia.")
+                if (expected > 0 && size != expected) error("Copia incompleta: $size de $expected bytes.")
+                return
+            } catch (e: Throwable) {
+                last = e
+                trace("import: intento $attempt de copiar fallo (${e.message}); reintentando")
+            }
+        }
+        throw last ?: error("No pude copiar el zip.")
+    }
+
+    /** The size the content provider advertises for a document, or -1 if it does not say. */
+    private fun contentResolverSize(uri: Uri): Long = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
+        } ?: -1L
+    }.getOrDefault(-1L)
 
     /** Downloads a zip from a direct URL (following redirects) and installs it. */
     suspend fun download(url: String, cookies: String?, onProgress: (Int) -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
@@ -351,9 +398,11 @@ class GameRepository(private val context: Context) {
         staging.mkdirs()
 
         val total = zip.length().coerceAtLeast(1)
+        trace("import: extrayendo ${zip.length()} bytes de ${zip.name}...")
         ZipInputStream(zip.inputStream().buffered()).use { input ->
             val buffer = ByteArray(64 * 1024)
             var written = 0L
+            var entries = 0
             var entry = input.nextEntry
             while (entry != null) {
                 val target = File(staging, entry.name)
@@ -376,8 +425,15 @@ class GameRepository(private val context: Context) {
                     }
                 }
                 input.closeEntry()
+                entries++
+                // A game zip holds tens of thousands of files; on slow/adopted storage the extraction
+                // can take a while, so leave a trail instead of going silent.
+                if (entries % 5000 == 0) {
+                    trace("import: extraidas $entries entradas (${written / (1024 * 1024)} MB)")
+                }
                 entry = input.nextEntry
             }
+            trace("import: extraccion terminada ($entries entradas, ${written / (1024 * 1024)} MB)")
         }
 
         // A zip of the game folder keeps it one level down, and the emulator wants it at the root.
